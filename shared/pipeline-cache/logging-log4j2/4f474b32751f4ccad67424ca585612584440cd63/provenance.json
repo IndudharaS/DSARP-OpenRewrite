@@ -1,0 +1,9 @@
+{
+  "system": "logging-log4j2",
+  "repositoryUrl": "https://github.com/apache/logging-log4j2.git",
+  "versionId": "4f474b32751f4ccad67424ca585612584440cd63",
+  "sourceRun": "20260804-133557-f610d7",
+  "predictionRows": 716,
+  "predictionsSha256": "9e5c939504d39315476de009ce21e2966b6ae2a5ca6b6cea9576caca59e9c1fd",
+  "note": "Centralized before pruning historical web runs."
+}

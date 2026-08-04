@@ -1,0 +1,11 @@
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: masters.project.log4j2.MoveFileSizeToRollingAction
+displayName: Move FileSize to rolling.action
+description: >-
+  Applies the model's Move Class suggestion to break the direct dependency
+  cycle between the rolling and rolling.action packages.
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.apache.logging.log4j.core.appender.rolling.FileSize
+      newFullyQualifiedTypeName: org.apache.logging.log4j.core.appender.rolling.action.FileSize

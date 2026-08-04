@@ -1,0 +1,49 @@
+# Refactoring Lab web dashboard
+
+The dashboard is a localhost-only interface for the generic Maven pipeline. It
+does not replace the CLI; it starts the same `run_generic_pipeline.sh` command
+with validated arguments and an isolated run directory.
+
+## Start
+
+```bash
+cd /Users/indudhara/Documents/Masters_Project/29-jul
+chmod +x scripts/run_web_dashboard.sh
+scripts/run_web_dashboard.sh
+```
+
+Open <http://127.0.0.1:8765> and keep the terminal running. Stop the server with
+`Ctrl+C`. A different port can be selected with `--port 9000`.
+
+## Features
+
+- creates fast verified, full, reused-training-data, or uploaded-predictions experiments;
+- fast verified mode reuses `shared/pipeline-cache/<system>/<commit>/predictions.csv`
+  for the same system and commit,
+  skipping RefactoringMiner, model training and prediction while retaining
+  OpenRewrite validation, build verification and matched Arcan analysis;
+- reuses `shared/refactoring-miner/default` across web and CLI experiments;
+- offers an explicit fresh-mining checkbox that rebuilds the shared cache;
+- provides presets for Tika, Karaf, Struts, Logging-Log4j2 and Cassandra and
+  fills their repository URLs and assigned revisions automatically;
+- uploads and validates the three baseline Arcan CSV files;
+- isolates every experiment below `webui/state/runs/RUN_ID/workspace`;
+- reports the active pipeline stage, total/stage timers and streams the combined
+  process log;
+- stops an active process group on explicit confirmation;
+- optionally validates public-API/manual-review candidates after a warning and
+  explicit confirmation; these still run in isolated worktrees and must pass
+  Maven verification before inclusion;
+- shows prediction samples, generated/validated recipe counts and reasons;
+- presents Arcan before/after metrics and comparison warnings;
+- downloads prediction, manifest, validation and Arcan artifacts;
+- retains run metadata and logs across dashboard restarts.
+- promotes predictions from successful runs into the shared system-and-commit
+  cache so deleting old run folders does not break future fast runs.
+
+The server binds to `127.0.0.1` by default and accepts repository URLs and exact
+Git commit hashes. Uploaded files are limited to 50 MB each. The target project
+must be Maven-based and include an executable `mvnw`.
+The built-in Logging-Log4j2 selection enables its API-compatibility validation
+profile automatically; other presets and custom systems use the generic Maven
+OpenRewrite executor.

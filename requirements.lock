@@ -1,0 +1,9 @@
+# Direct Python dependencies used by the pipeline. Versions reflect the tested environment.
+datasets==5.0.1
+jupyter==1.1.1
+nbconvert==7.17.1
+numpy==2.5.1
+pandas==3.0.5
+scikit-learn==1.9.0
+torch==2.13.0
+transformers==5.14.1

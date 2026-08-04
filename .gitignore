@@ -1,0 +1,30 @@
+.DS_Store
+.venv/
+.m2/
+.vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+*.log
+
+# Generated experiment state
+runs/
+webui/state/runs/
+pipeline_results/
+
+# Reusable local caches and generated artifacts
+shared/refactoring-miner/*/work/
+shared/refactoring-miner/*/output/
+shared/refactoring-miner/*/cache-manifest.json
+shared/pipeline-cache/*/*/*.csv
+shared/pipeline-cache/*/*/model-evaluation.json
+shared/pipeline-cache/*/*/training-data-quality.json
+shared/models/*/
+shared/training/*/*.jsonl
+
+# Downloaded third-party tools and runtimes
+tools/
+
+# Notebook execution artifacts
+.ipynb_checkpoints/
