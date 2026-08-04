@@ -345,9 +345,7 @@ def generate(args: argparse.Namespace) -> None:
                 None,
             )
             record.reason = unresolved_reason
-            if selected and candidate_count >= args.max_candidates:
-                record.reason = f"candidate limit reached ({args.max_candidates})"
-            elif selected:
+            if selected:
                 source, destination_package, score, reason = selected
                 destination_type = f"{destination_package}.{source.simple_name}"
                 record.source_type = source.qualified_name
@@ -423,12 +421,6 @@ def main() -> None:
     parser.add_argument("--elements-column", default="affected_elements")
     parser.add_argument("--suggestions-column", default="suggestions")
     parser.add_argument("--elements-separator", default="|")
-    parser.add_argument(
-        "--max-candidates",
-        type=int,
-        default=40,
-        help="maximum distinct source types emitted for isolated validation (default: 40)",
-    )
     generate(parser.parse_args())
 
 

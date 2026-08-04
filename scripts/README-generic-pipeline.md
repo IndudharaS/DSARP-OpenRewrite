@@ -154,9 +154,10 @@ still decide whether a concrete recommendation is safe to apply.
 Training separates records by commit (so one commit cannot leak across train and
 evaluation partitions), uses bounded inverse-frequency label weights, and chooses
 the best checkpoint by macro F1. Recipe generation searches all five ranked
-labels for an executable recommendation, emits up to 40 distinct repository-
-backed candidates by default, and records model rank, score, structural score,
-risk, and the exact validation failure category in its CSV/JSON reports.
+labels for an executable recommendation and emits every distinct repository-
+backed candidate it can safely concretize, with no numerical candidate cap. It
+records model rank, score, structural score, risk, and the exact validation
+failure category in its CSV/JSON reports.
 The supplied historical CSV summary is retained for traceability, but causal
 before/after deltas use fresh baseline and refactored runs from the same pinned
 Arcan version and configuration. `experiment-report.json` explicitly states

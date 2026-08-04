@@ -48,7 +48,7 @@ class SuggestionTests(unittest.TestCase):
                 generate(Namespace(
                     repository=repository, predictions=predictions, output_dir=output,
                     smell_column="architecture_smell", elements_column="affected_elements",
-                    suggestions_column="suggestions", elements_separator="|", max_candidates=40,
+                    suggestions_column="suggestions", elements_separator="|",
                 ))
             manifest = json.loads((output / "manifest.json").read_text())
             record = manifest["records"][0]

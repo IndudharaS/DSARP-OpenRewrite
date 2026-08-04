@@ -75,7 +75,7 @@ For each prediction, the generator:
 4. examines the imported classes responsible for each direction;
 5. prefers the lower-weight dependency direction;
 6. searches the complete ranked model output for a supported recommendation;
-7. emits distinct, ranked source/destination pairs (up to 40 by default);
+7. emits every distinct, ranked source/destination pair it can concretize;
 8. prevents the same source class from being selected twice.
 
 This is conservative by design. Compilation, tests, API compatibility, and smell
