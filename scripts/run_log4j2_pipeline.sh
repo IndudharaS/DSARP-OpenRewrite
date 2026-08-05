@@ -200,8 +200,17 @@ require_command() {
 
 run_expected_spring_failure() {
   local repository="$1" log_file="$2" status
+  local verify_arguments=(verify)
+  if [[ -n "${DSARP_MAVEN_TEST_PATTERN:-}" ]]; then
+    verify_arguments+=(
+      "-Dtest=$DSARP_MAVEN_TEST_PATTERN"
+      "-Dsurefire.failIfNoSpecifiedTests=false"
+    )
+    echo "Maven verification test pattern: $DSARP_MAVEN_TEST_PATTERN" | tee -a "$log_file"
+  fi
   set +e
-  (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw verify) 2>&1 | tee "$log_file"
+  (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "${verify_arguments[@]}") \
+    2>&1 | tee -a "$log_file"
   status=${PIPESTATUS[0]}
   set -e
 

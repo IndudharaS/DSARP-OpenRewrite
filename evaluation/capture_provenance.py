@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import subprocess
 from datetime import datetime, timezone
@@ -43,6 +44,7 @@ def main() -> None:
         "python": platform.python_version(),
         "git": command("git", "--version"),
         "java": command(str(args.java), "-version"),
+        "maven_test_pattern": os.environ.get("DSARP_MAVEN_TEST_PATTERN"),
         "tools": {
             "arcan_jar": {"path": str(args.arcan_jar), "sha256": digest(args.arcan_jar)},
             "refactoring_miner": {"path": str(args.refactoring_miner)},

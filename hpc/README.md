@@ -8,6 +8,12 @@ The PC² Python module must be loaded whenever the scratch virtual environment
 is used because compiled extensions depend on module-provided shared libraries
 such as `libffi.so.8`. Both Slurm scripts load it automatically.
 
+Noctua's project scratch filesystem also enforces project-group/setgid behavior.
+The pipeline therefore excludes only Log4j's `FileAppenderPermissionsTest`,
+which asserts that a process can assign arbitrary owner, group, and mode values.
+The exclusion is applied identically to baseline and refactored verification and
+is recorded in `run-provenance.json`; all other project tests continue to run.
+
 The repository is expected at:
 
 ```text
