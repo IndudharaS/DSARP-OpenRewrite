@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 REPOSITORY=""
-JAVA_HOME_17="$PROJECT_ROOT/tools/java/jdk-17/Contents/Home"
+JAVA_HOME_17="${DSARP_JAVA_HOME_17:-$PROJECT_ROOT/tools/java/jdk-17/Contents/Home}"
+PYTHON="${DSARP_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 RECIPE="$PROJECT_ROOT/openrewrite/recipes/log4j2-move-file-size.yml"
 FACADE_TEMPLATE="$PROJECT_ROOT/openrewrite/templates/FileSizeCompatibilityFacade.java"
 RESULTS_DIR=""
@@ -88,7 +89,7 @@ install_compatibility_facade() {
 
   cp "$FACADE_TEMPLATE" "$facade_target"
 
-  "$PROJECT_ROOT/.venv/bin/python" - "$test_file" <<'PY'
+  "$PYTHON" - "$test_file" <<'PY'
 import sys
 from pathlib import Path
 

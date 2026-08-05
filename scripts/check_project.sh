@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PYTHON="$PROJECT_ROOT/.venv/bin/python"
+PYTHON="${DSARP_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 
 [[ -x "$PYTHON" ]] || { echo "Python environment missing: $PYTHON" >&2; exit 1; }
 

@@ -3,8 +3,9 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ARCAN_HOME="$PROJECT_ROOT/tools/arcan-1.2.1/distribution/arcan-1.2.1"
-JAVA_HOME_VALUE="$PROJECT_ROOT/tools/java/jdk-17/Contents/Home"
+ARCAN_HOME="${DSARP_ARCAN_HOME:-$PROJECT_ROOT/tools/arcan-1.2.1/distribution/arcan-1.2.1}"
+JAVA_HOME_VALUE="${DSARP_JAVA_HOME_17:-$PROJECT_ROOT/tools/java/jdk-17/Contents/Home}"
+PYTHON="${DSARP_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 REPOSITORY=""
 OUTPUT_DIR=""
 
@@ -83,7 +84,7 @@ for report in "${required[@]}"; do
   }
 done
 
-"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/evaluation/summarize_arcan.py" \
+"$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" \
   summarize "$OUTPUT_DIR/raw" --output "$OUTPUT_DIR/summary.json" \
   --compiled-classes "$class_count" >/dev/null
 

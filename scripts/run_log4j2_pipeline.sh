@@ -8,11 +8,12 @@ PROJECT_NAME="logging-log4j2"
 REPOSITORY_URL="https://github.com/apache/logging-log4j2.git"
 VERSION_ID="4f474b32751f4ccad67424ca585612584440cd63"
 RUN_ROOT="$PROJECT_ROOT/runs/log4j2"
-JAVA_HOME_17="$PROJECT_ROOT/tools/java/jdk-17/Contents/Home"
-JAVA_HOME_21="$PROJECT_ROOT/tools/java/jdk-21/Contents/Home"
-PYTHON="$PROJECT_ROOT/.venv/bin/python"
-JUPYTER="$PROJECT_ROOT/.venv/bin/jupyter"
-REFMINER="$PROJECT_ROOT/tools/refactoring-miner/RefactoringMiner-3.1.4/bin/RefactoringMiner"
+JAVA_HOME_17="${DSARP_JAVA_HOME_17:-$PROJECT_ROOT/tools/java/jdk-17/Contents/Home}"
+JAVA_HOME_21="${DSARP_JAVA_HOME_21:-$PROJECT_ROOT/tools/java/jdk-21/Contents/Home}"
+PYTHON="${DSARP_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
+JUPYTER="${DSARP_JUPYTER:-$PROJECT_ROOT/.venv/bin/jupyter}"
+REFMINER="${DSARP_REFACTORING_MINER:-$PROJECT_ROOT/tools/refactoring-miner/RefactoringMiner-3.1.4/bin/RefactoringMiner}"
+ARCAN_HOME="${DSARP_ARCAN_HOME:-$PROJECT_ROOT/tools/arcan-1.2.1/distribution/arcan-1.2.1}"
 OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_log4j2.sh"
 OPENREWRITE_GENERATOR="$PROJECT_ROOT/scripts/generate_openrewrite_recipes.sh"
 ARCAN_RUNNER="$PROJECT_ROOT/scripts/run_arcan_smells.sh"
@@ -366,7 +367,7 @@ if should_run preflight; then
     --project "$PROJECT_NAME" --repository-url "$REPOSITORY_URL" \
     --version-id "$VERSION_ID" --profile "$PROFILE" \
     --java "$JAVA_HOME_17/bin/java" \
-    --arcan-jar "$PROJECT_ROOT/tools/arcan-1.2.1/distribution/arcan-1.2.1/arcan-1.2.1.jar" \
+    --arcan-jar "$ARCAN_HOME/arcan-1.2.1.jar" \
     --refactoring-miner "$REFMINER"
   "$JAVA_HOME_17/bin/java" -version
   "$PYTHON" --version
@@ -632,7 +633,8 @@ if should_run baseline; then
   "$ARCAN_RUNNER" \
     --repository "$BASE_REPO" \
     --output-dir "$RESULTS_DIR/arcan-baseline-matched" \
-    --java-home "$JAVA_HOME_17"
+    --java-home "$JAVA_HOME_17" \
+    --arcan-home "$ARCAN_HOME"
 fi
 
 if should_run rewrite; then
@@ -716,7 +718,8 @@ if should_run smells; then
   "$ARCAN_RUNNER" \
     --repository "$REWRITE_REPO" \
     --output-dir "$RESULTS_DIR/arcan-refactored" \
-    --java-home "$JAVA_HOME_17"
+    --java-home "$JAVA_HOME_17" \
+    --arcan-home "$ARCAN_HOME"
   "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" compare \
     "$RESULTS_DIR/arcan-baseline-matched/summary.json" \
     "$RESULTS_DIR/arcan-refactored/summary.json" \
