@@ -53,9 +53,36 @@ def now() -> str:
 
 def atomic_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def read_json_file(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as error:
+        if error.msg != "Extra data":
+            raise
+        decoder = json.JSONDecoder()
+        values: list[dict] = []
+        position = 0
+        while position < len(text):
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if position >= len(text):
+                break
+            item, position = decoder.raw_decode(text, position)
+            if isinstance(item, dict):
+                values.append(item)
+        if not values:
+            raise
+        value = values[-1]
+        atomic_json(path, value)
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected JSON object in {path}")
+    return value
 
 
 def metadata_path(run_id: str) -> Path:
@@ -130,14 +157,14 @@ def refresh_hpc_run(data: dict) -> dict:
 def refresh_hpc_run_in_background(run_id: str) -> None:
     try:
         path = metadata_path(run_id)
-        original = json.loads(path.read_text(encoding="utf-8"))
+        original = read_json_file(path)
         if original.get("status") not in {"queued", "running"}:
             return
         update = slurm_status(str(original["slurmJobId"]))
         if update.get("status") is None:
             update = {"slurmState": update["slurmState"]}
         with LOCK:
-            current = json.loads(path.read_text(encoding="utf-8"))
+            current = read_json_file(path)
             old_status = current.get("status")
             current.update(update)
             if (old_status != current.get("status")
@@ -166,7 +193,7 @@ def schedule_hpc_refresh(run_id: str) -> None:
 def load_run(run_id: str) -> dict:
     if not NAME.fullmatch(run_id) or not metadata_path(run_id).is_file():
         raise FileNotFoundError(run_id)
-    data = json.loads(metadata_path(run_id).read_text(encoding="utf-8"))
+    data = read_json_file(metadata_path(run_id))
     process = PROCESSES.get(run_id)
     if data.get("executionTarget") == "hpc":
         if data.get("status") in {"queued", "running"}:
@@ -252,7 +279,7 @@ def latest_compatible_predictions(system: str, version: str, exclude: str) -> Pa
         if metadata.parent.name == exclude:
             continue
         try:
-            data = json.loads(metadata.read_text(encoding="utf-8"))
+            data = read_json_file(metadata)
         except (OSError, json.JSONDecodeError):
             continue
         if data.get("system") != system or data.get("versionId") != version:
@@ -268,7 +295,7 @@ def latest_compatible_predictions(system: str, version: str, exclude: str) -> Pa
 def baseline_for_resume(run_id: str, system: str, version: str) -> Path:
     for metadata in RUNS.glob("*/metadata.json"):
         try:
-            data = json.loads(metadata.read_text(encoding="utf-8"))
+            data = read_json_file(metadata)
         except (OSError, json.JSONDecodeError):
             continue
         if (str(data.get("logicalRunId", "")) != run_id or data.get("system") != system
@@ -305,7 +332,7 @@ def monitor(run_id: str, process: subprocess.Popen[str], handle) -> None:
     code = process.wait()
     handle.close()
     with LOCK:
-        data = json.loads(metadata_path(run_id).read_text(encoding="utf-8"))
+        data = read_json_file(metadata_path(run_id))
         if data["status"] != "stopped":
             data["status"] = "completed" if code == 0 else "failed"
         data["exitCode"] = code
@@ -358,7 +385,7 @@ def recent_active_submission(key: str) -> dict | None:
     cutoff = datetime.now(timezone.utc).timestamp() - 120
     for metadata in RUNS.glob("*/metadata.json"):
         try:
-            data = json.loads(metadata.read_text(encoding="utf-8"))
+            data = read_json_file(metadata)
             created = datetime.fromisoformat(data["createdAt"]).timestamp()
         except (OSError, KeyError, ValueError, json.JSONDecodeError):
             continue
@@ -608,7 +635,14 @@ class Handler(BaseHTTPRequestHandler):
                                            "hpcAvailable": hpc_available(),
                                            "hpcProjectSpace": str(HPC_PROJECT_SPACE)})
             if parsed.path == "/api/runs":
-                values = [load_run(p.parent.name) for p in RUNS.glob("*/metadata.json")]
+                values = []
+                for metadata in RUNS.glob("*/metadata.json"):
+                    try:
+                        values.append(load_run(metadata.parent.name))
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        # Preserve the damaged file for diagnosis, but do not let
+                        # one historical experiment disconnect every UI user.
+                        continue
                 return self.json_response(sorted(values, key=lambda x: x["createdAt"], reverse=True))
             if len(parts) >= 3 and parts[:2] == ["api", "runs"]:
                 data = load_run(parts[2])

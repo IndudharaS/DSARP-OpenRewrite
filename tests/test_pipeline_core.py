@@ -14,7 +14,7 @@ from unittest import mock
 from evaluation.summarize_arcan import comparison
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
-from webui.server import detect_stage, normalize_slurm_state, validate_batch_options
+from webui.server import detect_stage, normalize_slurm_state, read_json_file, validate_batch_options
 import webui.server as dashboard
 
 
@@ -114,6 +114,13 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual((categories, size, start, maximum), (["high"], 12, 2, 3))
         with self.assertRaises(ValueError):
             validate_batch_options({"severityCategories": ["critical"]})
+
+    def test_concatenated_metadata_recovers_latest_object(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "metadata.json"
+            path.write_text('{"status":"queued"}\n{"status":"running","id":"newest"}\n')
+            self.assertEqual(read_json_file(path)["id"], "newest")
+            self.assertEqual(json.loads(path.read_text())["status"], "running")
 
     def test_hpc_submission_exports_inputs_without_running_pipeline_locally(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
