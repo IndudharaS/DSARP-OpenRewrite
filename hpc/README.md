@@ -74,6 +74,11 @@ Fresh mode does not require the shared prediction CSV. It passes `--remine`,
 then prepares training data, trains the model, generates new predictions, and
 continues through OpenRewrite and Arcan.
 
+If a fresh run stops after mining, first correct the reported dependency or
+environment issue with `noctua_setup.sbatch`, then reuse the run directory with
+`RESUME_RUN_ID` and `START_STAGE=training`. This preserves the completed mining
+output instead of processing the 2,500 commits again.
+
 Customize a submission without editing the script:
 
 ```bash

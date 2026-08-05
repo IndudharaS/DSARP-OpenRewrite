@@ -67,7 +67,7 @@ for path in "${required[@]}"; do
 done
 
 "$DSARP_PYTHON" -c \
-  "import torch, transformers, datasets, pandas, sklearn; print('Python runtime dependencies OK')"
+  "import accelerate, torch, transformers, datasets, pandas, sklearn; print('Python runtime dependencies OK'); print('Accelerate:', accelerate.__version__)"
 
 mkdir -p "$RUN_ROOT" "$PROJECT_SPACE/maven-repository"
 cd "$PROJECT_ROOT"

@@ -29,7 +29,7 @@ source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install --requirement "$PROJECT_ROOT/requirements.lock"
 python -c \
-  "import torch, transformers, datasets, pandas, sklearn; print('Python runtime dependencies OK')"
+  "import accelerate, torch, transformers, datasets, pandas, sklearn; print('Python runtime dependencies OK'); print('Accelerate:', accelerate.__version__)"
 
 export DSARP_PYTHON="$VENV_PATH/bin/python"
 export DSARP_JUPYTER="$VENV_PATH/bin/jupyter"
