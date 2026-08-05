@@ -18,6 +18,10 @@ FORWARD=()
 RUN_ROOT=""
 PROFILE=""
 ALLOW_RISKY_CANDIDATES=0
+SEVERITY_CATEGORIES="high,medium,low"
+BATCH_SIZE=10
+START_BATCH=1
+MAX_BATCHES=0
 
 usage() {
   cat <<'EOF'
@@ -41,6 +45,11 @@ Inputs:
                             logging-log4j2 preset and generic otherwise.
   --allow-risky-candidates  Experimentally execute public-API candidates in
                             isolated worktrees; Maven validation is still required.
+  --severity-categories LIST
+                            Comma-separated high,medium,low categories.
+  --batch-size NUMBER       Candidates per validation batch (default: 10).
+  --start-batch NUMBER      One-based first batch to execute (default: 1).
+  --max-batches NUMBER      Maximum batches to run; 0 means all.
 
 Lifecycle:
   --clean                   Back up an existing run before starting.
@@ -66,6 +75,10 @@ while (($#)); do
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
     --allow-risky-candidates) ALLOW_RISKY_CANDIDATES=1; shift ;;
+    --severity-categories) SEVERITY_CATEGORIES="${2:?missing categories}"; shift 2 ;;
+    --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
+    --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
+    --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
     --run-root) RUN_ROOT="${2:?missing path}"; shift 2 ;;
     --clean|--from|--through)
       FORWARD+=("$1")
@@ -119,6 +132,7 @@ fi
 if ((ALLOW_RISKY_CANDIDATES)); then
   arguments+=(--allow-risky-candidates)
 fi
+arguments+=(--severity-categories "$SEVERITY_CATEGORIES" --batch-size "$BATCH_SIZE" --start-batch "$START_BATCH" --max-batches "$MAX_BATCHES")
 
 if ((${#FORWARD[@]})); then
   exec "$SCRIPT_DIR/run_log4j2_pipeline.sh" "${arguments[@]}" "${FORWARD[@]}"

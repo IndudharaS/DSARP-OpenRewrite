@@ -56,7 +56,10 @@ generated-openrewrite/
 ```
 
 The manifest contains every prediction, including predictions that cannot be
-executed safely.
+executed safely. Each record also contains `severity`, `severity_score`, and
+`severity_reason`. `--severity-categories high,medium,low` controls which
+categories are concretized; unselected records remain in the manifest as
+`deferred_severity`.
 
 Possible statuses are:
 

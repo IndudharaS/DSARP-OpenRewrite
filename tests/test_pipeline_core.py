@@ -12,11 +12,16 @@ from pathlib import Path
 
 from evaluation.summarize_arcan import comparison
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
-from openrewrite.generate_recipes import generate, ranked_suggestions
+from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from webui.server import detect_stage
 
 
 class SuggestionTests(unittest.TestCase):
+    def test_severity_uses_smell_type_and_scope(self) -> None:
+        self.assertEqual(classify_severity("Cyclic Dependency", 8)[0], "high")
+        self.assertEqual(classify_severity("Unstable Dependency", 2)[0], "medium")
+        self.assertEqual(classify_severity("Other", 1)[0], "low")
+
     def test_ranked_suggestions_preserve_rank_and_score(self) -> None:
         self.assertEqual(
             ranked_suggestions("Extract Method (0.610) | Move Class (0.520)"),

@@ -36,6 +36,10 @@ PROFILE="log4j2"
 TRAINING_DATASET=""
 REMINE=0
 ALLOW_RISKY_CANDIDATES=0
+SEVERITY_CATEGORIES="high,medium,low"
+BATCH_SIZE=10
+START_BATCH=1
+MAX_BATCHES=0
 START_STAGE="preflight"
 STOP_STAGE="summary"
 
@@ -68,6 +72,11 @@ Options:
   --allow-risky-candidates
                          Execute high-risk public-API candidates in isolated
                          worktrees. Only Maven-validated changes are applied.
+  --severity-categories LIST
+                         Comma-separated high,medium,low categories (default: all).
+  --batch-size NUMBER    Candidates validated per batch (default: 10).
+  --start-batch NUMBER   One-based first batch to execute (default: 1).
+  --max-batches NUMBER   Stop validation after this many batches; 0 means all.
   --help                 Show this help.
 
 Stages:
@@ -111,6 +120,10 @@ while (($#)); do
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
     --allow-risky-candidates) ALLOW_RISKY_CANDIDATES=1; shift ;;
+    --severity-categories) SEVERITY_CATEGORIES="${2:?missing categories}"; shift 2 ;;
+    --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
+    --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
+    --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -122,6 +135,10 @@ if ((!PREDICTIONS_EXPLICIT)); then
   PREDICTIONS="$PROJECT_ROOT/shared/pipeline-cache/$PROJECT_NAME/$VERSION_ID/predictions.csv"
 fi
 [[ "$PROFILE" =~ ^(log4j2|generic)$ ]] || { echo "Invalid --profile: $PROFILE" >&2; exit 2; }
+[[ "$SEVERITY_CATEGORIES" =~ ^(high|medium|low)(,(high|medium|low))*$ ]] || { echo "Invalid --severity-categories: $SEVERITY_CATEGORIES" >&2; exit 2; }
+[[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || { echo "--batch-size must be a positive integer" >&2; exit 2; }
+[[ "$START_BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "--start-batch must be a positive integer" >&2; exit 2; }
+[[ "$MAX_BATCHES" =~ ^[0-9]+$ ]] || { echo "--max-batches must be zero or a positive integer" >&2; exit 2; }
 if [[ "$PROFILE" == "generic" ]]; then
   OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_maven.sh"
   VALIDATOR_COMPATIBILITY_PROFILE="none"
@@ -628,7 +645,8 @@ if should_run rewrite; then
   "$OPENREWRITE_GENERATOR" \
     --repository "$REWRITE_REPO" \
     --predictions "$PREDICTIONS" \
-    --output-dir "$RESULTS_DIR/generated-openrewrite"
+    --output-dir "$RESULTS_DIR/generated-openrewrite" \
+    --severity-categories "$SEVERITY_CATEGORIES"
 
   validator_arguments=(
     --repository "$REWRITE_REPO"
@@ -637,6 +655,9 @@ if should_run rewrite; then
     --rewrite-runner "$OPENREWRITE_RUNNER"
     --java-home "$JAVA_HOME_17"
     --compatibility-profile "$VALIDATOR_COMPATIBILITY_PROFILE"
+    --batch-size "$BATCH_SIZE"
+    --start-batch "$START_BATCH"
+    --max-batches "$MAX_BATCHES"
   )
   if ((ALLOW_RISKY_CANDIDATES)); then
     validator_arguments+=(--allow-risky-candidates)

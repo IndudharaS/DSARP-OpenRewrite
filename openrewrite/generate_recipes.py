@@ -63,6 +63,26 @@ class ManifestRecord:
     recipe_file: str | None
     candidate_score: float | None
     risk_level: str | None
+    severity: str
+    severity_score: int
+    severity_reason: str
+
+
+def classify_severity(smell: str, affected_count: int) -> tuple[str, int, str]:
+    """Prioritize smells using transparent architecture-level evidence."""
+    normalized = smell.lower()
+    if "cyclic" in normalized or "cycle" in normalized:
+        smell_weight, smell_reason = 3, "cyclic dependency"
+    elif "hub" in normalized:
+        smell_weight, smell_reason = 3, "hub-like dependency"
+    elif "unstable" in normalized:
+        smell_weight, smell_reason = 2, "unstable dependency"
+    else:
+        smell_weight, smell_reason = 1, "other smell type"
+    scope_weight = 2 if affected_count >= 8 else 1 if affected_count >= 4 else 0
+    score = smell_weight + scope_weight
+    severity = "high" if score >= 4 else "medium" if score >= 2 else "low"
+    return severity, score, f"{smell_reason}; {affected_count} affected elements"
 
 
 def java_files(repository: Path) -> Iterable[Path]:
@@ -282,6 +302,10 @@ def generate(args: argparse.Namespace) -> None:
     for index, row in enumerate(rows, start=1):
         affected = [item.strip() for item in row[args.elements_column].split(args.elements_separator) if item.strip()]
         affected_set = set(affected)
+        severity, severity_score, severity_reason = classify_severity(
+            row[args.smell_column], len(affected_set)
+        )
+        selected_severities = set(getattr(args, "severity_categories", "high,medium,low").split(","))
         ranked_predictions = ranked_suggestions(row[args.suggestions_column])
         top_refactoring = ranked_predictions[0][0] if ranked_predictions else None
         supported = next(
@@ -311,10 +335,16 @@ def generate(args: argparse.Namespace) -> None:
             recipe_file=None,
             candidate_score=None,
             risk_level=None,
+            severity=severity,
+            severity_score=severity_score,
+            severity_reason=severity_reason,
         )
 
         unknown_packages = sorted(affected_set.difference(packages))
-        if unknown_packages:
+        if severity not in selected_severities:
+            record.status = "deferred_severity"
+            record.reason = f"{severity} severity was not selected for this run"
+        elif unknown_packages:
             record.reason = f"affected packages not present at this revision: {', '.join(unknown_packages[:8])}"
         elif not ranked_predictions:
             record.reason = "model produced no ranked recommendation"
@@ -390,6 +420,8 @@ def generate(args: argparse.Namespace) -> None:
         "packages": len(packages),
         "record_count": len(records),
         "status_counts": dict(Counter(record.status for record in records)),
+        "severity_counts": dict(Counter(record.severity for record in records)),
+        "selected_severity_categories": sorted(selected_severities),
         "aggregate_recipe_name": "generated.architecture.ApplyAllCandidates",
         "aggregate_recipe_file": "all-candidates.yml",
         "records": [asdict(record) for record in records],
@@ -421,7 +453,16 @@ def main() -> None:
     parser.add_argument("--elements-column", default="affected_elements")
     parser.add_argument("--suggestions-column", default="suggestions")
     parser.add_argument("--elements-separator", default="|")
-    generate(parser.parse_args())
+    parser.add_argument(
+        "--severity-categories", default="high,medium,low",
+        help="comma-separated categories to process: high,medium,low (default: all)",
+    )
+    args = parser.parse_args()
+    categories = {item.strip().lower() for item in args.severity_categories.split(",") if item.strip()}
+    if not categories or not categories.issubset({"high", "medium", "low"}):
+        parser.error("--severity-categories must contain high, medium and/or low")
+    args.severity_categories = ",".join(categories)
+    generate(args)
 
 
 if __name__ == "__main__":

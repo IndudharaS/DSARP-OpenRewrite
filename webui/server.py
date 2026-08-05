@@ -225,18 +225,35 @@ def start_run(payload: dict) -> dict:
         raise ValueError("Unknown run mode")
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky_candidates = bool(payload.get("allowRiskyCandidates", False))
+    severity_categories = payload.get("severityCategories", ["high", "medium", "low"])
+    if (not isinstance(severity_categories, list) or not severity_categories
+            or not set(severity_categories).issubset({"high", "medium", "low"})):
+        raise ValueError("Select one or more valid severity categories")
+    try:
+        batch_size = int(payload.get("batchSize", 10))
+        start_batch = int(payload.get("startBatch", 1))
+        max_batches = int(payload.get("maxBatches", 0))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Batch size and maximum batches must be integers") from error
+    if not 1 <= batch_size <= 100 or start_batch < 1 or max_batches < 0:
+        raise ValueError("Batch size must be 1-100, start batch positive, and maximum batches nonnegative")
     if fresh_mining:
         if mode != "full":
             raise ValueError("Fresh mining is available only for the full workflow")
         command.append("--remine")
     if allow_risky_candidates:
         command.append("--allow-risky-candidates")
+    command += ["--severity-categories", ",".join(severity_categories),
+                "--batch-size", str(batch_size), "--start-batch", str(start_batch),
+                "--max-batches", str(max_batches)]
 
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "pipeline.log"
     meta = {"id": run_id, "system": system, "repositoryUrl": repository, "versionId": version,
             "mode": mode, "freshMining": fresh_mining,
             "allowRiskyCandidates": allow_risky_candidates,
+            "severityCategories": severity_categories, "batchSize": batch_size,
+            "startBatch": start_batch, "maxBatches": max_batches,
             "status": "running", "stage": "starting", "createdAt": now(), "stageStartedAt": now(),
             "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
             "logFile": str(log)}

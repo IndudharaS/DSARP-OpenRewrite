@@ -34,6 +34,9 @@ Open <http://127.0.0.1:8765> and keep the terminal running. Stop the server with
 - optionally validates public-API/manual-review candidates after a warning and
   explicit confirmation; these still run in isolated worktrees and must pass
   Maven verification before inclusion;
+- asks which High, Medium and Low/Small smell categories to process, how many
+  candidates belong in each batch, and how many batches to execute; zero maximum
+  batches means process all batches;
 - shows prediction samples, generated/validated recipe counts and reasons;
 - presents Arcan before/after metrics and comparison warnings;
 - downloads prediction, manifest, validation and Arcan artifacts;
@@ -47,3 +50,18 @@ must be Maven-based and include an executable `mvnw`.
 The built-in Logging-Log4j2 selection enables its API-compatibility validation
 profile automatically; other presets and custom systems use the generic Maven
 OpenRewrite executor.
+
+## Severity and batches
+
+Severity is an explicit prioritization heuristic, not a model confidence score.
+Cyclic and hub-like dependencies receive a base weight of 3, unstable
+dependencies 2, and other smell types 1. Smells affecting at least four elements
+receive one additional point and those affecting at least eight receive two.
+Scores 4+ are High, 2-3 are Medium, and 1 is Low/Small. The manifest records the
+score and explanation for every prediction.
+
+Candidates are ordered High, Medium, Low and then divided into the configured
+batch size. Candidate validation remains isolated. `Number of batches = 1` is a
+short laptop run; zero processes all batches from the selected starting batch.
+Set `Start from batch` to 2, 3, and so on in later experiments. Candidates
+outside the selected window are reported as `deferred_batch_limit`.

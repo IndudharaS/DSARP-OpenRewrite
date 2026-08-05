@@ -119,14 +119,27 @@ def main() -> None:
         "--skip-dependency-preparation", action="store_true",
         help="skip the initial reactor install only when dependencies were already prepared",
     )
+    parser.add_argument("--batch-size", type=int, default=10,
+                        help="candidates per validation batch (default: 10)")
+    parser.add_argument("--start-batch", type=int, default=1,
+                        help="one-based first batch to execute (default: 1)")
+    parser.add_argument("--max-batches", type=int, default=0,
+                        help="maximum batches to execute; 0 processes every batch")
     args = parser.parse_args()
+    if args.batch_size < 1 or args.start_batch < 1 or args.max_batches < 0:
+        parser.error("batch size/start must be positive and --max-batches cannot be negative")
 
     repository = args.repository.resolve()
     generated = args.generated_dir.resolve()
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     manifest = json.loads((generated / "manifest.json").read_text(encoding="utf-8"))
-    candidates = [row for row in manifest["records"] if row["status"] == "ready_for_dry_run"]
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    candidates = sorted(
+        (row for row in manifest["records"] if row["status"] == "ready_for_dry_run"),
+        key=lambda row: (severity_order.get(str(row.get("severity")), 3),
+                         -int(row.get("severity_score") or 0), int(row["prediction_id"])),
+    )
     results, validated = [], []
     worktrees = output / "worktrees"
     worktrees.mkdir(exist_ok=True)
@@ -154,7 +167,16 @@ def main() -> None:
             f"see {prepare_log}"
         )
 
-    for record in candidates:
+    start_index = (args.start_batch - 1) * args.batch_size
+    end_index = start_index + args.batch_size * args.max_batches if args.max_batches else len(candidates)
+    executed_candidates = candidates[start_index:end_index]
+    deferred_candidates = candidates[:start_index] + candidates[end_index:]
+
+    for position, record in enumerate(executed_candidates, start=start_index):
+        batch_number = position // args.batch_size + 1
+        print(f"Validation batch {batch_number}: candidate {position - start_index + 1}/{len(executed_candidates)} ",
+              f"(prediction {record['prediction_id']}, severity {record.get('severity', 'unknown')})",
+              flush=True)
         prediction = int(record["prediction_id"])
         worktree = worktrees / f"prediction-{prediction:04d}"
         recipe = generated / str(record["recipe_file"])
@@ -165,6 +187,7 @@ def main() -> None:
         )):
             results.append({
                 **record,
+                "batch_number": batch_number,
                 "validation_status": "manual_review",
                 "failure_category": "missing_compatibility_strategy",
                 "validation_reason": (
@@ -248,11 +271,26 @@ def main() -> None:
             run(["git", "-C", str(repository), "worktree", "remove", "--force", str(worktree)])
         results.append({
             **record,
+            "batch_number": batch_number,
             "validation_status": status,
             "failure_category": category,
             "validation_reason": reason,
             "diagnostic_log": str(diagnostic_log.relative_to(output)),
             "changed_files": changed_files,
+        })
+
+    executed_ids = {int(record["prediction_id"]) for record in executed_candidates}
+    for position, record in enumerate(candidates):
+        if int(record["prediction_id"]) in executed_ids:
+            continue
+        results.append({
+            **record,
+            "batch_number": position // args.batch_size + 1,
+            "validation_status": "deferred_batch_limit",
+            "failure_category": "batch_limit",
+            "validation_reason": "candidate was deferred by the configured maximum batch count",
+            "diagnostic_log": "",
+            "changed_files": [],
         })
 
     (output / "validated-candidates.yml").write_text(aggregate(validated), encoding="utf-8")
@@ -265,6 +303,13 @@ def main() -> None:
         category_counts[category] = category_counts.get(category, 0) + 1
     report = {
         "candidate_count": len(candidates),
+        "executed_candidate_count": len(executed_candidates),
+        "deferred_candidate_count": len(deferred_candidates),
+        "batch_size": args.batch_size,
+        "start_batch": args.start_batch,
+        "configured_max_batches": args.max_batches,
+        "total_batches": (len(candidates) + args.batch_size - 1) // args.batch_size,
+        "executed_batches": (len(executed_candidates) + args.batch_size - 1) // args.batch_size,
         "validated_count": status_counts.get("validated", 0),
         "failed_count": status_counts.get("failed", 0),
         "not_applicable_count": status_counts.get("not_applicable", 0),
@@ -275,7 +320,8 @@ def main() -> None:
     }
     (output / "validation-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     with (output / "validation-report.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["prediction_id", "source_type", "destination_type", "model_rank", "model_score",
+        fields = ["prediction_id", "severity", "severity_score", "batch_number",
+                  "source_type", "destination_type", "model_rank", "model_score",
                   "candidate_score", "risk_level", "validation_status", "failure_category",
                   "validation_reason", "diagnostic_log", "changed_files"]
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
