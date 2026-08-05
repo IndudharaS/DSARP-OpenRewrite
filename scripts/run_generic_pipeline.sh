@@ -17,7 +17,7 @@ FULL=1
 FORWARD=()
 RUN_ROOT=""
 PROFILE=""
-ALLOW_RISKY_CANDIDATES=0
+ALLOW_RISKY_CANDIDATES=1
 
 usage() {
   cat <<'EOF'
@@ -39,8 +39,12 @@ Inputs:
   --remine                  Generate fresh shared mining output.
   --profile PROFILE         generic or log4j2. Defaults to log4j2 for the
                             logging-log4j2 preset and generic otherwise.
-  --allow-risky-candidates  Experimentally execute public-API candidates in
-                            isolated worktrees; Maven validation is still required.
+  --allow-risky-candidates  Execute public-API candidates in isolated
+                            worktrees; Maven validation is still required.
+                            This is the default.
+  --skip-risky-candidates   Route public-API candidates to manual_review
+                            instead of validating them (the old conservative
+                            default).
 
 Lifecycle:
   --clean                   Back up an existing run before starting.
@@ -66,6 +70,7 @@ while (($#)); do
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
     --allow-risky-candidates) ALLOW_RISKY_CANDIDATES=1; shift ;;
+    --skip-risky-candidates) ALLOW_RISKY_CANDIDATES=0; shift ;;
     --run-root) RUN_ROOT="${2:?missing path}"; shift 2 ;;
     --clean|--from|--through)
       FORWARD+=("$1")
@@ -118,6 +123,8 @@ else
 fi
 if ((ALLOW_RISKY_CANDIDATES)); then
   arguments+=(--allow-risky-candidates)
+else
+  arguments+=(--skip-risky-candidates)
 fi
 
 if ((${#FORWARD[@]})); then

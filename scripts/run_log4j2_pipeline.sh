@@ -35,7 +35,7 @@ PREDICTIONS_EXPLICIT=0
 PROFILE="log4j2"
 TRAINING_DATASET=""
 REMINE=0
-ALLOW_RISKY_CANDIDATES=0
+ALLOW_RISKY_CANDIDATES=1
 START_STAGE="preflight"
 STOP_STAGE="summary"
 
@@ -68,6 +68,11 @@ Options:
   --allow-risky-candidates
                          Execute high-risk public-API candidates in isolated
                          worktrees. Only Maven-validated changes are applied.
+                         This is the default.
+  --skip-risky-candidates
+                         Route high-risk public-API candidates to manual_review
+                         instead of validating them (the old conservative
+                         default).
   --help                 Show this help.
 
 Stages:
@@ -111,6 +116,7 @@ while (($#)); do
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
     --allow-risky-candidates) ALLOW_RISKY_CANDIDATES=1; shift ;;
+    --skip-risky-candidates) ALLOW_RISKY_CANDIDATES=0; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -640,6 +646,8 @@ if should_run rewrite; then
   )
   if ((ALLOW_RISKY_CANDIDATES)); then
     validator_arguments+=(--allow-risky-candidates)
+  else
+    validator_arguments+=(--no-allow-risky-candidates)
   fi
   "$PYTHON" "$CANDIDATE_VALIDATOR" "${validator_arguments[@]}"
 

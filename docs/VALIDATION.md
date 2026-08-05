@@ -7,7 +7,10 @@ A candidate is automatically applicable only when all gates pass:
 1. the affected packages and source type exist at the exact requested commit;
 2. the recipe has concrete, repository-derived parameters;
 3. test/production and module boundaries are safe;
-4. a public API move has an explicitly registered compatibility strategy;
+4. a public API move either has an explicitly registered compatibility
+   strategy or, by default, is executed and validated like any other
+   candidate (`--skip-risky-candidates` restores the old behavior of holding
+   unregistered public API moves for manual review instead);
 5. OpenRewrite produces relevant source/build-file changes;
 6. formatting and `git diff --check` pass;
 7. isolated Maven verification and configured API checks pass;
@@ -38,6 +41,12 @@ The validated change moves
 `org.apache.logging.log4j.core.appender.rolling.FileSize` to
 `org.apache.logging.log4j.core.appender.rolling.action.FileSize`, updates its
 usages/tests, and retains the old public API through a compatibility facade.
+
+This report reflects a run made before `--allow-risky-candidates` became the
+default. The 39 candidates held for manual review above were never executed
+against Maven, only skipped; rerunning with the current default (or without
+`--skip-risky-candidates`) will attempt real isolated verification for those
+candidates and can validate more than the one `FileSize` migration.
 
 Matched Arcan 1.2.1 measurement produced:
 

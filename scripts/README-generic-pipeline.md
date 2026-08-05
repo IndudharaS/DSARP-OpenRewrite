@@ -113,13 +113,13 @@ scripts/run_generic_pipeline.sh \
   --clean
 ```
 
-## Experimental public-API candidates
+## Public-API candidates
 
-For exploratory runs, `--allow-risky-candidates` permits candidates normally
-held for manual review to be executed in isolated worktrees. This does not mark
-them valid automatically: a concrete source change and successful Maven
-verification are still required, and downstream API compatibility remains a
-separate concern.
+By default (`--allow-risky-candidates`), public-API candidates are executed in
+isolated worktrees alongside non-public ones. This does not mark them valid
+automatically: a concrete source change and successful Maven verification are
+still required, and downstream API compatibility remains a separate concern.
+Pass `--skip-risky-candidates` to hold them for manual review instead.
 
 ## Outputs
 

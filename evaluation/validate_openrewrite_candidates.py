@@ -111,9 +111,11 @@ def main() -> None:
     parser.add_argument("--java-home", required=True, type=Path)
     parser.add_argument("--compatibility-profile", choices=("none", "log4j2"), default="none")
     parser.add_argument(
-        "--allow-risky-candidates", action="store_true",
-        help=("execute high-risk public-API candidates in isolated worktrees; "
-              "they must still produce a source change and pass Maven verification"),
+        "--allow-risky-candidates", action=argparse.BooleanOptionalAction, default=True,
+        help=("execute high-risk public-API candidates in isolated worktrees (default); "
+              "they must still produce a source change and pass Maven verification. "
+              "Pass --no-allow-risky-candidates to route them to manual_review instead "
+              "of validating them."),
     )
     parser.add_argument(
         "--skip-dependency-preparation", action="store_true",

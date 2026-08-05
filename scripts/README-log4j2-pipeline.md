@@ -165,11 +165,13 @@ Inspect the complete manifest with:
 jq '.status_counts' runs/log4j2/results/generated-openrewrite/manifest.json
 ```
 
-Non-public candidates are applied in isolated disposable worktrees, formatted
-with Spotless, and checked with `mvn verify -DskipTests`. Public API candidates
-are routed to manual review unless a compatibility strategy is registered. This
-includes Log4j2's BND public-API baseline checks. The validation report and the
-configuration ultimately applied are:
+All candidates, including public API moves, are applied in isolated disposable
+worktrees, formatted with Spotless, and checked with `mvn verify -DskipTests`
+by default (`--allow-risky-candidates`, unless `--skip-risky-candidates` is
+passed). Public API candidates without a registered compatibility strategy
+still validate this way; use `--skip-risky-candidates` to route them to manual
+review instead. This includes Log4j2's BND public-API baseline checks. The
+validation report and the configuration ultimately applied are:
 
 ```text
 runs/log4j2/results/openrewrite-validation/validation-report.csv

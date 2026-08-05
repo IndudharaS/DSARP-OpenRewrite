@@ -231,6 +231,8 @@ def start_run(payload: dict) -> dict:
         command.append("--remine")
     if allow_risky_candidates:
         command.append("--allow-risky-candidates")
+    else:
+        command.append("--skip-risky-candidates")
 
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "pipeline.log"
