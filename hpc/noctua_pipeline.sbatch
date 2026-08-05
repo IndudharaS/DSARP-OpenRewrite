@@ -35,6 +35,9 @@ export MAVEN_OPTS="-Dmaven.repo.local=$PROJECT_SPACE/maven-repository -Xmx12g"
 # The pipeline passes this through Surefire's additive excludes file so the
 # project's execution-specific exclusions (including OverflowTest) stay intact.
 export DSARP_MAVEN_TEST_EXCLUDES="**/FileAppenderPermissionsTest.*"
+# Several Log4j 1.x compatibility tests write the same target/temp.A* files.
+# A single Surefire fork prevents cross-process races on high-core-count nodes.
+export DSARP_MAVEN_FORK_COUNT="1"
 
 SEVERITY_CATEGORIES="${SEVERITY_CATEGORIES:-high}"
 BATCH_SIZE="${BATCH_SIZE:-10}"

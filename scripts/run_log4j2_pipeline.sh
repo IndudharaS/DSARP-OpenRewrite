@@ -209,6 +209,10 @@ run_expected_spring_failure() {
     )
     echo "Additional Maven verification exclusions: $DSARP_MAVEN_TEST_EXCLUDES" | tee -a "$log_file"
   fi
+  if [[ -n "${DSARP_MAVEN_FORK_COUNT:-}" ]]; then
+    verify_arguments+=("-DforkCount=$DSARP_MAVEN_FORK_COUNT")
+    echo "Maven verification fork count: $DSARP_MAVEN_FORK_COUNT" | tee -a "$log_file"
+  fi
   set +e
   (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "${verify_arguments[@]}") \
     2>&1 | tee -a "$log_file"
