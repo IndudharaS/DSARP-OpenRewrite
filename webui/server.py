@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import hashlib
 import json
 import mimetypes
 import os
@@ -35,6 +36,7 @@ STAGES = ["preflight", "inputs", "mining", "training", "prediction", "clone", "b
           "rewrite", "focused_test", "format", "final_verify", "smells", "summary"]
 PROCESSES: dict[str, subprocess.Popen[str]] = {}
 LOCK = threading.Lock()
+SUBMIT_LOCK = threading.Lock()
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
 SLURM_ACTIVE = {"PENDING": "queued", "CONFIGURING": "queued", "RUNNING": "running",
@@ -308,12 +310,38 @@ def validate_batch_options(payload: dict) -> tuple[list[str], int, int, int]:
     return categories, batch_size, start_batch, max_batches
 
 
+def submission_key(payload: dict) -> str:
+    fields = {key: payload.get(key) for key in (
+        "system", "repositoryUrl", "versionId", "executionTarget", "mode",
+        "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
+        "startBatch", "maxBatches", "resumeRunId", "resumeStage",
+    )}
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+
+
+def recent_active_submission(key: str) -> dict | None:
+    cutoff = datetime.now(timezone.utc).timestamp() - 120
+    for metadata in RUNS.glob("*/metadata.json"):
+        try:
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            created = datetime.fromisoformat(data["createdAt"]).timestamp()
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            continue
+        if data.get("submissionKey") == key and data.get("status") in {"queued", "running"} and created >= cutoff:
+            return data
+    return None
+
+
 def start_hpc_run(payload: dict) -> dict:
     if EXECUTION_MODE not in {"hpc", "both"}:
         raise ValueError("This dashboard was not started with HPC execution enabled")
     if not hpc_available():
         raise ValueError("Slurm commands or hpc/noctua_pipeline.sbatch are unavailable")
     system, repository, version = validate_identity(payload)
+    key = submission_key(payload)
+    duplicate = recent_active_submission(key)
+    if duplicate:
+        return duplicate
     categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
     mode = str(payload.get("mode", "latest_predictions"))
     fresh_mining = bool(payload.get("freshMining", False))
@@ -394,6 +422,7 @@ def start_hpc_run(payload: dict) -> dict:
         "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
         "logFile": str(log), "slurmJobId": job_id, "logicalRunId": resume_id or job_id,
         "resumeRunId": resume_id or None, "resumeStage": resume_stage or None,
+        "submissionKey": key,
     }
     atomic_json(metadata_path(run_id), meta)
     return meta
@@ -580,7 +609,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parts = [x for x in urlparse(self.path).path.split("/") if x]
         try:
-            if parts == ["api", "runs"]: return self.json_response(start_run(self.read_json()), 201)
+            if parts == ["api", "runs"]:
+                with SUBMIT_LOCK:
+                    return self.json_response(start_run(self.read_json()), 201)
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "stop":
                 data = load_run(parts[2]); process = PROCESSES.get(parts[2])
                 if data.get("executionTarget") == "hpc" and data.get("status") in {"queued", "running"}:

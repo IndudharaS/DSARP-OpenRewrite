@@ -29,7 +29,12 @@ export DSARP_PYTHON="$VENV_PATH/bin/python"
 export DSARP_JUPYTER="$VENV_PATH/bin/jupyter"
 export DSARP_REFACTORING_MINER="$TOOLS_ROOT/refactoring-miner/RefactoringMiner-3.1.4/bin/RefactoringMiner"
 export DSARP_ARCAN_HOME="$TOOLS_ROOT/arcan-1.2.1/distribution/arcan-1.2.1"
-export MAVEN_OPTS="-Dmaven.repo.local=$PROJECT_SPACE/maven-repository -Xmx12g"
+# A job-private Maven repository prevents two dashboard submissions from
+# concurrently replacing the same artifact on the parallel filesystem. Such a
+# collision previously surfaced as ClassFormatError: Truncated class file.
+MAVEN_REPOSITORY="${MAVEN_REPOSITORY:-$PROJECT_SPACE/maven-repository/jobs/$SLURM_JOB_ID}"
+mkdir -p "$MAVEN_REPOSITORY"
+export MAVEN_OPTS="-Dmaven.repo.local=$MAVEN_REPOSITORY -Xmx12g"
 # Noctua scratch enforces project-group/setgid semantics, so Log4j's test that
 # asserts arbitrary owner/group/mode changes is not valid on this filesystem.
 # The pipeline passes this through Surefire's additive excludes file so the
@@ -79,7 +84,7 @@ done
 "$DSARP_PYTHON" -c \
   "import accelerate, torch, transformers, datasets, pandas, sklearn; print('Python runtime dependencies OK'); print('Accelerate:', accelerate.__version__)"
 
-mkdir -p "$RUN_ROOT" "$PROJECT_SPACE/maven-repository"
+mkdir -p "$RUN_ROOT" "$MAVEN_REPOSITORY"
 cd "$PROJECT_ROOT"
 
 echo "Job: $SLURM_JOB_ID on $(hostname)"
@@ -89,6 +94,7 @@ echo "System: $SYSTEM"
 echo "Repository: $REPOSITORY_URL"
 echo "Version: $VERSION_ID"
 echo "Run root: $RUN_ROOT"
+echo "Maven repository: $MAVEN_REPOSITORY"
 
 pipeline_resume_arguments=()
 if [[ -n "${START_STAGE:-}" ]]; then
