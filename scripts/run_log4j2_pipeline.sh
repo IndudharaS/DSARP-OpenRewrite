@@ -199,13 +199,15 @@ require_command() {
 }
 
 run_expected_spring_failure() {
-  local repository="$1" log_file="$2" status
+  local repository="$1" log_file="$2" status excludes_file
   local verify_arguments=(verify)
   if [[ -n "${DSARP_MAVEN_TEST_EXCLUDES:-}" ]]; then
+    excludes_file="$RUN_ROOT/.maven-surefire-excludes"
+    printf '%s\n' "$DSARP_MAVEN_TEST_EXCLUDES" | tr ',' '\n' >"$excludes_file"
     verify_arguments+=(
-      "-Dsurefire.excludes=$DSARP_MAVEN_TEST_EXCLUDES"
+      "-Dsurefire.excludesFile=$excludes_file"
     )
-    echo "Maven verification exclusions: $DSARP_MAVEN_TEST_EXCLUDES" | tee -a "$log_file"
+    echo "Additional Maven verification exclusions: $DSARP_MAVEN_TEST_EXCLUDES" | tee -a "$log_file"
   fi
   set +e
   (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "${verify_arguments[@]}") \
