@@ -37,6 +37,7 @@ STAGES = ["preflight", "inputs", "mining", "training", "prediction", "clone", "b
 PROCESSES: dict[str, subprocess.Popen[str]] = {}
 LOCK = threading.Lock()
 SUBMIT_LOCK = threading.Lock()
+HPC_REFRESHING: set[str] = set()
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
 SLURM_ACTIVE = {"PENDING": "queued", "CONFIGURING": "queued", "RUNNING": "running",
@@ -126,16 +127,50 @@ def refresh_hpc_run(data: dict) -> dict:
     return data
 
 
+def refresh_hpc_run_in_background(run_id: str) -> None:
+    try:
+        path = metadata_path(run_id)
+        original = json.loads(path.read_text(encoding="utf-8"))
+        if original.get("status") not in {"queued", "running"}:
+            return
+        update = slurm_status(str(original["slurmJobId"]))
+        if update.get("status") is None:
+            update = {"slurmState": update["slurmState"]}
+        with LOCK:
+            current = json.loads(path.read_text(encoding="utf-8"))
+            old_status = current.get("status")
+            current.update(update)
+            if (old_status != current.get("status")
+                    and current.get("status") in {"completed", "failed", "stopped", "interrupted"}):
+                current["finishedAt"] = now()
+                if current["status"] == "completed":
+                    cache_completed_artifacts(current)
+            atomic_json(path, current)
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+        # A slow/unavailable Slurm controller must not make the HTTP dashboard
+        # unavailable. The next browser poll schedules another status refresh.
+        pass
+    finally:
+        with LOCK:
+            HPC_REFRESHING.discard(run_id)
+
+
+def schedule_hpc_refresh(run_id: str) -> None:
+    with LOCK:
+        if run_id in HPC_REFRESHING:
+            return
+        HPC_REFRESHING.add(run_id)
+    threading.Thread(target=refresh_hpc_run_in_background, args=(run_id,), daemon=True).start()
+
+
 def load_run(run_id: str) -> dict:
     if not NAME.fullmatch(run_id) or not metadata_path(run_id).is_file():
         raise FileNotFoundError(run_id)
     data = json.loads(metadata_path(run_id).read_text(encoding="utf-8"))
     process = PROCESSES.get(run_id)
     if data.get("executionTarget") == "hpc":
-        previous = json.dumps(data, sort_keys=True)
-        data = refresh_hpc_run(data)
-        if json.dumps(data, sort_keys=True) != previous:
-            atomic_json(metadata_path(run_id), data)
+        if data.get("status") in {"queued", "running"}:
+            schedule_hpc_refresh(run_id)
     elif process and process.poll() is not None and data["status"] == "running":
         data["status"] = "completed" if process.returncode == 0 else "failed"
         data["exitCode"] = process.returncode

@@ -53,17 +53,14 @@ OpenRewrite executor.
 
 ## Noctua HPC dashboard
 
-Start the server on `n2login1` from the scratch clone. The server only handles
+Start the persistent server on `n2login1` from the scratch clone. The server only handles
 HTTP requests and Slurm commands; Maven, model and Arcan work runs in an
 allocated compute job.
 
 ```bash
 cd /scratch/hpc-prf-dssecs/$USER/dsarp-openrewrite
-module reset
-module load lang
-module load Python/3.12.3-GCCcore-13.3.0
-export DSARP_PYTHON=/scratch/hpc-prf-dssecs/$USER/environments/dsarp-python-3.12/bin/python
-scripts/run_web_dashboard.sh --hpc
+hpc/manage_dashboard.sh start
+hpc/manage_dashboard.sh status
 ```
 
 On the Mac, keep a second terminal open with this SSH tunnel (password-only

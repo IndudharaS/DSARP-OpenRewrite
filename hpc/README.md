@@ -2,22 +2,22 @@
 
 ## Web interface (recommended)
 
-Run the lightweight dashboard on the login node; it submits the heavy work to
-Slurm rather than executing Maven, the model or Arcan on the login node:
+Run the lightweight persistent dashboard controller on the login node; it
+submits heavy work to Slurm and remains available after an SSH/VS Code terminal
+disconnects:
 
 ```bash
-module reset
-module load lang
-module load Python/3.12.3-GCCcore-13.3.0
-export DSARP_PYTHON=/scratch/hpc-prf-dssecs/$USER/environments/dsarp-python-3.12/bin/python
 cd /scratch/hpc-prf-dssecs/$USER/dsarp-openrewrite
-scripts/run_web_dashboard.sh --hpc
+hpc/manage_dashboard.sh start
+hpc/manage_dashboard.sh status
 ```
 
 From the client, forward the dashboard with
 `ssh -N -L 8765:127.0.0.1:8765 n2login1`, then open
 `http://127.0.0.1:8765`. The interface can submit, monitor, cancel and resume
-Slurm runs. Full instructions are in `webui/README.md`.
+Slurm runs. Use `hpc/manage_dashboard.sh logs` for server output and
+`hpc/manage_dashboard.sh restart` after pulling dashboard code. Stopping this
+server does not cancel Slurm jobs. Full instructions are in `webui/README.md`.
 
 These scripts run the pipeline on PC² Noctua 2 under account
 `hpc-prf-dssecs`. Compute-heavy setup and experiments must be submitted through
