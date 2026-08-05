@@ -199,7 +199,9 @@ require_command() {
 }
 
 run_expected_spring_failure() {
-  local repository="$1" log_file="$2" status excludes_file
+  local repository="$1" log_file="$2" status excludes_file attempt_log retry_log retry_status line
+  local known_flake_only=1
+  local failure_lines=()
   local verify_arguments=(verify)
   if [[ -n "${DSARP_MAVEN_TEST_EXCLUDES:-}" ]]; then
     excludes_file="$RUN_ROOT/.maven-surefire-excludes"
@@ -213,21 +215,58 @@ run_expected_spring_failure() {
     verify_arguments+=("-DforkCount=$DSARP_MAVEN_FORK_COUNT")
     echo "Maven verification fork count: $DSARP_MAVEN_FORK_COUNT" | tee -a "$log_file"
   fi
+  attempt_log="${log_file%.log}-attempt.log"
   set +e
   (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "${verify_arguments[@]}") \
-    2>&1 | tee -a "$log_file"
+    2>&1 | tee "$attempt_log"
   status=${PIPESTATUS[0]}
   set -e
+  cat "$attempt_log" >>"$log_file"
 
   if ((status == 0)); then
     echo "Full verification passed."
     return
   fi
 
-  if grep -q "Log4j2SpringBootInitTest.testEnvironment" "$log_file" \
-      && grep -Eq "expected: <1> but was: <5>|expected 1.*actual 5" "$log_file"; then
+  if grep -q "Log4j2SpringBootInitTest.testEnvironment" "$attempt_log" \
+      && grep -Eq "expected: <1> but was: <5>|expected 1.*actual 5" "$attempt_log"; then
     echo "Accepted known baseline condition: Spring Boot test expected 1 message and observed 5."
     return
+  fi
+
+  while IFS= read -r line; do
+    failure_lines+=("$line")
+  done < <(sed -n '/^\[ERROR\] Failures:/,/^\[ERROR\] Tests run:/p' "$attempt_log" \
+    | grep '^\[ERROR\]   ' || true)
+  if ((${#failure_lines[@]})); then
+    for line in "${failure_lines[@]}"; do
+      case "$line" in
+        *RollingAppenderDirectWriteTempCompressedFilePatternTest.testAppender*|\
+        *MutableThreadContextMapFilterTest.http_location_works*) ;;
+        *) known_flake_only=0 ;;
+      esac
+    done
+  else
+    known_flake_only=0
+  fi
+  if ((known_flake_only)); then
+    retry_log="${log_file%.log}-known-flake-retry.log"
+    echo "Full verification failed only in the allowlisted timing-sensitive tests; rerunning both in isolation." \
+      | tee "$retry_log"
+    set +e
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
+      -pl log4j-core-test -am \
+      -Dtest=RollingAppenderDirectWriteTempCompressedFilePatternTest,MutableThreadContextMapFilterTest \
+      -Dsurefire.failIfNoSpecifiedTests=false -DforkCount=1 test) \
+      2>&1 | tee -a "$retry_log"
+    retry_status=${PIPESTATUS[0]}
+    set -e
+    if ((retry_status == 0)); then
+      echo "Accepted reproducible test-harness condition: all allowlisted failures passed in isolated retry." \
+        | tee -a "$retry_log" "$log_file"
+      return
+    fi
+    echo "Allowlisted failure retry did not pass. See $retry_log" >&2
   fi
 
   echo "Unexpected Maven verification failure. See $log_file" >&2

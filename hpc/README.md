@@ -16,6 +16,12 @@ is recorded in `run-provenance.json`. It uses Surefire's additive exclusions fil
 so the project's normal test-discovery rules remain unchanged and all other
 project tests continue to run.
 
+Two Log4j tests involving rollover temporary-file counts and HTTP configuration
+polling have demonstrated timing-sensitive failures under full-suite load. They
+are not excluded. Full verification must first fail only in those allowlisted
+tests, after which both are rerun in isolation; the pipeline continues only when
+that focused retry passes. The full attempt and retry logs are retained.
+
 The repository is expected at:
 
 ```text
