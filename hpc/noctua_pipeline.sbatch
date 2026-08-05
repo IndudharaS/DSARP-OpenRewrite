@@ -17,6 +17,12 @@ PROJECT_ROOT="$PROJECT_SPACE/dsarp-openrewrite"
 VENV_PATH="$PROJECT_SPACE/environments/dsarp-python-3.12"
 TOOLS_ROOT="$PROJECT_SPACE/tools"
 
+# The virtual environment links against libraries supplied by the PC² Python
+# module (including libffi); loading the module is required in every fresh job.
+module reset
+module load lang
+module load Python/3.12.3-GCCcore-13.3.0
+
 export DSARP_JAVA_HOME_17="/opt/software/pc2/EB-SW/software/Java/17.0.6"
 export DSARP_JAVA_HOME_21="/opt/software/pc2/EB-SW/software/Java/21.0.2"
 export DSARP_PYTHON="$VENV_PATH/bin/python"
@@ -44,6 +50,9 @@ required=(
 for path in "${required[@]}"; do
   [[ -e "$path" ]] || { echo "Required HPC input missing: $path" >&2; exit 1; }
 done
+
+"$DSARP_PYTHON" -c \
+  "import torch, transformers, datasets, pandas, sklearn; print('Python runtime dependencies OK')"
 
 mkdir -p "$RUN_ROOT" "$PROJECT_SPACE/maven-repository"
 cd "$PROJECT_ROOT"

@@ -4,6 +4,10 @@ These scripts run the pipeline on PC² Noctua 2 under account
 `hpc-prf-dssecs`. Compute-heavy setup and experiments must be submitted through
 Slurm, not executed on a login node.
 
+The PC² Python module must be loaded whenever the scratch virtual environment
+is used because compiled extensions depend on module-provided shared libraries
+such as `libffi.so.8`. Both Slurm scripts load it automatically.
+
 The repository is expected at:
 
 ```text
