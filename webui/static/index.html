@@ -1,5 +1,5 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Refactoring Lab</title><link rel="stylesheet" href="/app.css?v=5"></head><body>
+<title>Refactoring Lab</title><link rel="stylesheet" href="/app.css?v=6"></head><body>
 <aside><div class="brand"><span>RL</span><div>Refactoring Lab<small>Architecture experiment console</small></div></div>
 <button class="primary wide" id="newRun">＋ New experiment</button><nav id="runList"></nav><footer id="environmentLabel">Pipeline dashboard · Maven · OpenRewrite · Arcan</footer></aside>
 <main><header><div><p class="eyebrow">REFACTORING PIPELINE</p><h1 id="title">Experiment overview</h1></div><div class="runclock"><div id="status" class="status idle">No run selected</div><small id="timer">Elapsed 00:00:00</small></div></header>
@@ -22,4 +22,4 @@
 <div class="grid"><label>Candidates per batch<input type="number" name="batchSize" min="1" max="100" value="10" required><small class="hint">Ten is recommended for local laptops.</small></label><label>Start from batch<input type="number" name="startBatch" min="1" value="1" required><small class="hint">Use 2 on a later run to continue with batch 2.</small></label></div><label>Number of batches to run<input type="number" name="maxBatches" min="0" value="1" required><small class="hint">Use 0 to process all batches from the selected starting batch.</small></label></fieldset>
 <div id="baselineWrap"><h3>Baseline Arcan CSV files</h3><div class="uploads"><label>component-metrics.csv<input type="file" name="component" accept=".csv" required></label><label>smell-characteristics.csv<input type="file" name="characteristics" accept=".csv" required></label><label>smell-affects.csv<input type="file" name="affects" accept=".csv" required></label></div></div>
 <label id="extraWrap" hidden><span id="extraLabel">Additional input</span><input type="file" name="extra"></label><p class="error" id="formError"></p><div class="actions"><button type="button" id="cancel">Cancel</button><button class="primary" type="submit">Start experiment</button></div></form></dialog>
-<script src="/app.js?v=5"></script></body></html>
+<script src="/app.js?v=6"></script></body></html>
