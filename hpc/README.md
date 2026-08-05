@@ -71,6 +71,18 @@ sbatch --export=ALL,SEVERITY_CATEGORIES=high,BATCH_SIZE=10,START_BATCH=2,MAX_BAT
 `MAX_BATCHES=0` processes every remaining batch. Every Slurm job writes to its
 own run directory named by `SLURM_JOB_ID`.
 
+Resume an existing run at a named pipeline stage without repeating completed
+work:
+
+```bash
+sbatch --export=ALL,RESUME_RUN_ID=JOB_ID,START_STAGE=final_verify \
+  hpc/noctua_pipeline.sbatch
+```
+
+`START_STAGE` is accepted only with `RESUME_RUN_ID`, preventing accidental
+attempts to resume inside a new empty run directory. A `resume-*.txt` audit
+record is written into the reused run directory.
+
 Monitor and inspect:
 
 ```bash

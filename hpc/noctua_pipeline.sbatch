@@ -45,7 +45,8 @@ START_BATCH="${START_BATCH:-1}"
 MAX_BATCHES="${MAX_BATCHES:-1}"
 VERSION_ID="4f474b32751f4ccad67424ca585612584440cd63"
 PREDICTIONS="$PROJECT_ROOT/shared/pipeline-cache/logging-log4j2/$VERSION_ID/predictions.csv"
-RUN_ROOT="$PROJECT_SPACE/runs/logging-log4j2/${SLURM_JOB_ID}"
+RUN_ID="${RESUME_RUN_ID:-$SLURM_JOB_ID}"
+RUN_ROOT="$PROJECT_SPACE/runs/logging-log4j2/$RUN_ID"
 
 required=(
   "$DSARP_PYTHON"
@@ -69,6 +70,19 @@ echo "Job: $SLURM_JOB_ID on $(hostname)"
 echo "Severity: $SEVERITY_CATEGORIES; batch size: $BATCH_SIZE; start: $START_BATCH; count: $MAX_BATCHES"
 echo "Run root: $RUN_ROOT"
 
+pipeline_resume_arguments=()
+if [[ -n "${START_STAGE:-}" ]]; then
+  [[ -n "${RESUME_RUN_ID:-}" ]] || {
+    echo "START_STAGE requires RESUME_RUN_ID to avoid resuming an empty run." >&2
+    exit 2
+  }
+  pipeline_resume_arguments+=(--from "$START_STAGE")
+  printf 'Slurm job %s resumed run %s from %s with Maven fork count %s\n' \
+    "$SLURM_JOB_ID" "$RESUME_RUN_ID" "$START_STAGE" "$DSARP_MAVEN_FORK_COUNT" \
+    >"$RUN_ROOT/resume-$SLURM_JOB_ID.txt"
+  echo "Resuming run $RESUME_RUN_ID from stage $START_STAGE"
+fi
+
 scripts/run_generic_pipeline.sh \
   --system logging-log4j2 \
   --repository-url https://github.com/apache/logging-log4j2.git \
@@ -80,6 +94,7 @@ scripts/run_generic_pipeline.sh \
   --batch-size "$BATCH_SIZE" \
   --start-batch "$START_BATCH" \
   --max-batches "$MAX_BATCHES" \
-  --allow-risky-candidates
+  --allow-risky-candidates \
+  "${pipeline_resume_arguments[@]}"
 
 echo "Pipeline completed. Results: $RUN_ROOT/results"
