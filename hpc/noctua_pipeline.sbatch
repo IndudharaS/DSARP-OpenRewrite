@@ -33,7 +33,7 @@ export MAVEN_OPTS="-Dmaven.repo.local=$PROJECT_SPACE/maven-repository -Xmx12g"
 # Noctua scratch enforces project-group/setgid semantics, so Log4j's test that
 # asserts arbitrary owner/group/mode changes is not valid on this filesystem.
 # All other tests run for both baseline and refactored verification.
-export DSARP_MAVEN_TEST_PATTERN="*,!org.apache.logging.log4j.core.appender.FileAppenderPermissionsTest"
+export DSARP_MAVEN_TEST_EXCLUDES="**/FileAppenderPermissionsTest.*"
 
 SEVERITY_CATEGORIES="${SEVERITY_CATEGORIES:-high}"
 BATCH_SIZE="${BATCH_SIZE:-10}"

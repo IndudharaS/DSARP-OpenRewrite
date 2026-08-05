@@ -201,12 +201,11 @@ require_command() {
 run_expected_spring_failure() {
   local repository="$1" log_file="$2" status
   local verify_arguments=(verify)
-  if [[ -n "${DSARP_MAVEN_TEST_PATTERN:-}" ]]; then
+  if [[ -n "${DSARP_MAVEN_TEST_EXCLUDES:-}" ]]; then
     verify_arguments+=(
-      "-Dtest=$DSARP_MAVEN_TEST_PATTERN"
-      "-Dsurefire.failIfNoSpecifiedTests=false"
+      "-Dsurefire.excludes=$DSARP_MAVEN_TEST_EXCLUDES"
     )
-    echo "Maven verification test pattern: $DSARP_MAVEN_TEST_PATTERN" | tee -a "$log_file"
+    echo "Maven verification exclusions: $DSARP_MAVEN_TEST_EXCLUDES" | tee -a "$log_file"
   fi
   set +e
   (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "${verify_arguments[@]}") \

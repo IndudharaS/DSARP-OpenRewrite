@@ -12,7 +12,9 @@ Noctua's project scratch filesystem also enforces project-group/setgid behavior.
 The pipeline therefore excludes only Log4j's `FileAppenderPermissionsTest`,
 which asserts that a process can assign arbitrary owner, group, and mode values.
 The exclusion is applied identically to baseline and refactored verification and
-is recorded in `run-provenance.json`; all other project tests continue to run.
+is recorded in `run-provenance.json`. It uses Surefire's exclusion-only property,
+so the project's normal test-discovery rules remain unchanged and all other
+project tests continue to run.
 
 The repository is expected at:
 
