@@ -61,6 +61,19 @@ squeue -u $USER
 sbatch hpc/noctua_pipeline.sbatch
 ```
 
+The default `PIPELINE_MODE=reuse_predictions` uses the shared 716-row
+prediction CSV and skips mining, training, and prediction. To rebuild the
+experiment from fresh RefactoringMiner output, submit with:
+
+```bash
+sbatch --export=ALL,PIPELINE_MODE=fresh,SEVERITY_CATEGORIES=high,BATCH_SIZE=1,START_BATCH=1,MAX_BATCHES=1 \
+  hpc/noctua_pipeline.sbatch
+```
+
+Fresh mode does not require the shared prediction CSV. It passes `--remine`,
+then prepares training data, trains the model, generates new predictions, and
+continues through OpenRewrite and Arcan.
+
 Customize a submission without editing the script:
 
 ```bash
