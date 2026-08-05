@@ -372,11 +372,21 @@ def validate_batch_options(payload: dict) -> tuple[list[str], int, int, int]:
     return categories, batch_size, start_batch, max_batches
 
 
+def validate_parallel_workers(payload: dict) -> int:
+    try:
+        workers = int(payload.get("parallelWorkers", 1))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Parallel worker count must be an integer") from error
+    if not 1 <= workers <= 16:
+        raise ValueError("Parallel worker count must be between 1 and 16")
+    return workers
+
+
 def submission_key(payload: dict) -> str:
     fields = {key: payload.get(key) for key in (
         "system", "repositoryUrl", "versionId", "executionTarget", "mode",
         "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
-        "startBatch", "maxBatches", "resumeRunId", "resumeStage",
+        "startBatch", "maxBatches", "parallelWorkers", "resumeRunId", "resumeStage",
     )}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -405,6 +415,7 @@ def start_hpc_run(payload: dict) -> dict:
     if duplicate:
         return duplicate
     categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
+    parallel_workers = validate_parallel_workers(payload)
     mode = str(payload.get("mode", "latest_predictions"))
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky = bool(payload.get("allowRiskyCandidates", False))
@@ -456,6 +467,7 @@ def start_hpc_run(payload: dict) -> dict:
         "PREDICTIONS_CSV": predictions, "TRAINING_DATASET": training,
         "SEVERITY_CATEGORIES": ",".join(categories), "BATCH_SIZE": str(batch_size),
         "START_BATCH": str(start_batch), "MAX_BATCHES": str(max_batches),
+        "PARALLEL_WORKERS": str(parallel_workers),
         "ALLOW_RISKY_CANDIDATES": "1" if allow_risky else "0",
         "PROFILE": "log4j2" if system == "logging-log4j2" else "generic",
     })
@@ -480,6 +492,7 @@ def start_hpc_run(payload: dict) -> dict:
         "mode": mode, "executionTarget": "hpc", "freshMining": fresh_mining,
         "allowRiskyCandidates": allow_risky, "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
+        "parallelWorkers": parallel_workers,
         "status": "queued", "stage": "queued", "createdAt": now(), "stageStartedAt": now(),
         "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
         "logFile": str(log), "slurmJobId": job_id, "logicalRunId": resume_id or job_id,
@@ -526,6 +539,7 @@ def start_run(payload: dict) -> dict:
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky_candidates = bool(payload.get("allowRiskyCandidates", False))
     severity_categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
+    parallel_workers = validate_parallel_workers(payload)
     if fresh_mining:
         if mode != "full":
             raise ValueError("Fresh mining is available only for the full workflow")
@@ -534,7 +548,7 @@ def start_run(payload: dict) -> dict:
         command.append("--allow-risky-candidates")
     command += ["--severity-categories", ",".join(severity_categories),
                 "--batch-size", str(batch_size), "--start-batch", str(start_batch),
-                "--max-batches", str(max_batches)]
+                "--max-batches", str(max_batches), "--parallel-workers", str(parallel_workers)]
 
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "pipeline.log"
@@ -543,6 +557,7 @@ def start_run(payload: dict) -> dict:
             "allowRiskyCandidates": allow_risky_candidates,
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
+            "parallelWorkers": parallel_workers,
             "status": "running", "stage": "starting", "createdAt": now(), "stageStartedAt": now(),
             "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
             "logFile": str(log)}
@@ -566,6 +581,7 @@ def result_summary(data: dict) -> dict:
     for key, relative in {
         "manifest": "generated-openrewrite/manifest.json",
         "validation": "openrewrite-validation/validation-report.json",
+        "selection": "openrewrite-validation/selection-report.json",
         "comparison": "arcan-comparison.json",
         "arcan": "arcan-refactored/summary.json",
         "experiment": "experiment-report.json",
@@ -594,6 +610,22 @@ def result_summary(data: dict) -> dict:
             "count": len(rows), "sample": rows[:25], "origin": prediction_origin,
             "source": str(predictions),
         }
+        validation_records = output.get("validation", {}).get("records") or output.get("selection", {}).get("records", [])
+        selected_rows = []
+        for candidate in validation_records:
+            if candidate.get("validation_status") == "deferred_batch_limit":
+                continue
+            prediction_id = int(candidate.get("prediction_id", 0))
+            if not 1 <= prediction_id <= len(rows):
+                continue
+            # Preserve every column from the original prediction CSV and attach
+            # the concrete candidate/validation evidence used for this batch.
+            selected_rows.append({
+                "prediction_id": prediction_id,
+                "prediction_row": rows[prediction_id - 1],
+                "candidate": candidate,
+            })
+        output["selectedPredictionRows"] = selected_rows
     expected_artifacts = [
         f"pipeline-results/{data['system']}_refactoring_suggestions_from_trained_model.csv",
         "results/baseline-input-validation.json", "results/run-provenance.json",

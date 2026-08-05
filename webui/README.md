@@ -38,6 +38,12 @@ Open <http://127.0.0.1:8765> and keep the terminal running. Stop the server with
   candidates belong in each batch, and how many batches to execute; zero maximum
   batches means process all batches;
 - shows prediction samples, generated/validated recipe counts and reasons;
+- distinguishes selected/executed, deferred, failed and validated recipes, so
+  a recipe outside the configured batch is never displayed as rejected;
+- shows every original prediction-CSV column for every row selected into the
+  batch, together with concrete source/destination and validation evidence;
+- configures bounded parallel validation workers; `0` maximum batches selects
+  all remaining generated candidates;
 - presents Arcan before/after metrics and comparison warnings;
 - downloads prediction, manifest, validation and Arcan artifacts;
 - retains run metadata and logs across dashboard restarts.

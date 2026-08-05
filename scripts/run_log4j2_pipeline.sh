@@ -41,6 +41,7 @@ SEVERITY_CATEGORIES="high,medium,low"
 BATCH_SIZE=10
 START_BATCH=1
 MAX_BATCHES=0
+PARALLEL_WORKERS=1
 START_STAGE="preflight"
 STOP_STAGE="summary"
 
@@ -78,6 +79,8 @@ Options:
   --batch-size NUMBER    Candidates validated per batch (default: 10).
   --start-batch NUMBER   One-based first batch to execute (default: 1).
   --max-batches NUMBER   Stop validation after this many batches; 0 means all.
+  --parallel-workers NUMBER
+                         Candidates validated concurrently (default: 1).
   --help                 Show this help.
 
 Stages:
@@ -125,6 +128,7 @@ while (($#)); do
     --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
     --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
+    --parallel-workers) PARALLEL_WORKERS="${2:?missing worker count}"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -140,6 +144,7 @@ fi
 [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || { echo "--batch-size must be a positive integer" >&2; exit 2; }
 [[ "$START_BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "--start-batch must be a positive integer" >&2; exit 2; }
 [[ "$MAX_BATCHES" =~ ^[0-9]+$ ]] || { echo "--max-batches must be zero or a positive integer" >&2; exit 2; }
+[[ "$PARALLEL_WORKERS" =~ ^[1-9][0-9]*$ ]] || { echo "--parallel-workers must be a positive integer" >&2; exit 2; }
 if [[ "$PROFILE" == "generic" ]]; then
   OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_maven.sh"
   VALIDATOR_COMPATIBILITY_PROFILE="none"
@@ -713,6 +718,7 @@ if should_run rewrite; then
     --batch-size "$BATCH_SIZE"
     --start-batch "$START_BATCH"
     --max-batches "$MAX_BATCHES"
+    --parallel-workers "$PARALLEL_WORKERS"
   )
   if ((ALLOW_RISKY_CANDIDATES)); then
     validator_arguments+=(--allow-risky-candidates)
