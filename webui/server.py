@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local zero-dependency web dashboard for the refactoring pipeline."""
+"""Zero-dependency local and Slurm dashboard for the refactoring pipeline."""
 
 from __future__ import annotations
 
@@ -27,12 +27,21 @@ RUNS = STATE / "runs"
 ASSETS = ROOT / "webui" / "static"
 PIPELINE = ROOT / "scripts" / "run_generic_pipeline.sh"
 PIPELINE_CACHE = ROOT / "shared" / "pipeline-cache"
+HPC_SCRIPT = ROOT / "hpc" / "noctua_pipeline.sbatch"
+EXECUTION_MODE = "local"
+HPC_PROJECT_SPACE = Path(os.environ.get("DSARP_HPC_PROJECT_SPACE", f"/scratch/hpc-prf-dssecs/{os.environ.get('USER', '')}"))
+HPC_RUNS_ROOT = HPC_PROJECT_SPACE / "runs"
 STAGES = ["preflight", "inputs", "mining", "training", "prediction", "clone", "baseline",
           "rewrite", "focused_test", "format", "final_verify", "smells", "summary"]
 PROCESSES: dict[str, subprocess.Popen[str]] = {}
 LOCK = threading.Lock()
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
+SLURM_ACTIVE = {"PENDING": "queued", "CONFIGURING": "queued", "RUNNING": "running",
+                "COMPLETING": "running", "REQUEUED": "queued", "RESIZING": "running"}
+SLURM_FAILED = {"FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "BOOT_FAIL",
+                "DEADLINE", "PREEMPTED", "REVOKED"}
+RESUME_STAGES = ["baseline", "rewrite", "focused_test", "format", "final_verify", "smells", "summary"]
 
 
 def now() -> str:
@@ -50,12 +59,82 @@ def metadata_path(run_id: str) -> Path:
     return RUNS / run_id / "metadata.json"
 
 
+def command_available(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def hpc_available() -> bool:
+    return HPC_SCRIPT.is_file() and all(command_available(name) for name in ("sbatch", "squeue", "sacct", "scancel"))
+
+
+def normalize_slurm_state(state: str) -> str:
+    value = state.strip().upper().split("+")[0]
+    if value in SLURM_ACTIVE:
+        return SLURM_ACTIVE[value]
+    if value == "COMPLETED":
+        return "completed"
+    if value.startswith("CANCELLED"):
+        return "stopped"
+    if value in SLURM_FAILED:
+        return "failed"
+    return "queued" if not value else "failed"
+
+
+def slurm_status(job_id: str) -> dict:
+    queued = subprocess.run(
+        ["squeue", "-h", "-j", job_id, "-o", "%T|%M|%R"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    line = queued.stdout.strip().splitlines()
+    if line:
+        state, elapsed, reason = (line[0].split("|", 2) + ["", ""])[:3]
+        return {"slurmState": state, "status": normalize_slurm_state(state),
+                "slurmElapsed": elapsed, "slurmReason": reason, "exitCode": None}
+    accounting = subprocess.run(
+        ["sacct", "-n", "-X", "-P", "-j", job_id,
+         "--format=State,Elapsed,ExitCode"],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    records = [value for value in accounting.stdout.strip().splitlines() if value.strip()]
+    if not records:
+        return {"slurmState": "ACCOUNTING_PENDING", "status": None, "exitCode": None}
+    state, elapsed, exit_code = (records[0].split("|", 2) + ["", ""])[:3]
+    numeric_exit = None
+    try:
+        numeric_exit = int(exit_code.split(":", 1)[0])
+    except ValueError:
+        pass
+    return {"slurmState": state, "status": normalize_slurm_state(state),
+            "slurmElapsed": elapsed, "slurmReason": "", "exitCode": numeric_exit}
+
+
+def refresh_hpc_run(data: dict) -> dict:
+    if data.get("status") not in {"queued", "running"}:
+        return data
+    update = slurm_status(str(data["slurmJobId"]))
+    if update.get("status") is None:
+        data["slurmState"] = update["slurmState"]
+        return data
+    old_status = data.get("status")
+    data.update(update)
+    if old_status != data["status"] and data["status"] in {"completed", "failed", "stopped", "interrupted"}:
+        data["finishedAt"] = now()
+        if data["status"] == "completed":
+            cache_completed_artifacts(data)
+    return data
+
+
 def load_run(run_id: str) -> dict:
     if not NAME.fullmatch(run_id) or not metadata_path(run_id).is_file():
         raise FileNotFoundError(run_id)
     data = json.loads(metadata_path(run_id).read_text(encoding="utf-8"))
     process = PROCESSES.get(run_id)
-    if process and process.poll() is not None and data["status"] == "running":
+    if data.get("executionTarget") == "hpc":
+        previous = json.dumps(data, sort_keys=True)
+        data = refresh_hpc_run(data)
+        if json.dumps(data, sort_keys=True) != previous:
+            atomic_json(metadata_path(run_id), data)
+    elif process and process.poll() is not None and data["status"] == "running":
         data["status"] = "completed" if process.returncode == 0 else "failed"
         data["exitCode"] = process.returncode
         data["finishedAt"] = now()
@@ -149,6 +228,22 @@ def latest_compatible_predictions(system: str, version: str, exclude: str) -> Pa
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def baseline_for_resume(run_id: str, system: str, version: str) -> Path:
+    for metadata in RUNS.glob("*/metadata.json"):
+        try:
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (str(data.get("logicalRunId", "")) != run_id or data.get("system") != system
+                or data.get("versionId") != version):
+            continue
+        candidate = metadata.parent / "inputs" / "baseline"
+        if all((candidate / name).is_file() for name in
+               ("component-metrics.csv", "smell-characteristics.csv", "smell-affects.csv")):
+            return candidate
+    return ROOT / "baseline_csv"
+
+
 def cache_completed_artifacts(data: dict) -> None:
     """Retain reusable, target-compatible outputs outside disposable run folders."""
     run_root = Path(data["runRoot"])
@@ -184,7 +279,7 @@ def monitor(run_id: str, process: subprocess.Popen[str], handle) -> None:
         PROCESSES.pop(run_id, None)
 
 
-def start_run(payload: dict) -> dict:
+def validate_identity(payload: dict) -> tuple[str, str, str]:
     system = str(payload.get("system", "")).strip()
     repository = str(payload.get("repositoryUrl", "")).strip()
     version = str(payload.get("versionId", "")).strip()
@@ -194,6 +289,120 @@ def start_run(payload: dict) -> dict:
         raise ValueError("Repository URL is invalid")
     if not COMMIT.fullmatch(version):
         raise ValueError("Version ID must be a Git commit hash")
+    return system, repository, version
+
+
+def validate_batch_options(payload: dict) -> tuple[list[str], int, int, int]:
+    categories = payload.get("severityCategories", ["high", "medium", "low"])
+    if (not isinstance(categories, list) or not categories
+            or not set(categories).issubset({"high", "medium", "low"})):
+        raise ValueError("Select one or more valid severity categories")
+    try:
+        batch_size = int(payload.get("batchSize", 10))
+        start_batch = int(payload.get("startBatch", 1))
+        max_batches = int(payload.get("maxBatches", 0))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Batch size and maximum batches must be integers") from error
+    if not 1 <= batch_size <= 100 or start_batch < 1 or max_batches < 0:
+        raise ValueError("Batch size must be 1-100, start batch positive, and maximum batches nonnegative")
+    return categories, batch_size, start_batch, max_batches
+
+
+def start_hpc_run(payload: dict) -> dict:
+    if EXECUTION_MODE not in {"hpc", "both"}:
+        raise ValueError("This dashboard was not started with HPC execution enabled")
+    if not hpc_available():
+        raise ValueError("Slurm commands or hpc/noctua_pipeline.sbatch are unavailable")
+    system, repository, version = validate_identity(payload)
+    categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
+    mode = str(payload.get("mode", "latest_predictions"))
+    fresh_mining = bool(payload.get("freshMining", False))
+    allow_risky = bool(payload.get("allowRiskyCandidates", False))
+    resume_id = str(payload.get("resumeRunId", "")).strip()
+    resume_stage = str(payload.get("resumeStage", "")).strip()
+    if bool(resume_id) != bool(resume_stage):
+        raise ValueError("Resume run ID and resume stage must be provided together")
+    if resume_id and (not NAME.fullmatch(resume_id) or resume_stage not in RESUME_STAGES):
+        raise ValueError("Invalid HPC run ID or resume stage")
+
+    pending_id = "hpc-pending-" + uuid.uuid4().hex[:10]
+    folder = RUNS / pending_id
+    inputs = folder / "inputs"
+    uploads = payload.get("baselineFiles") or []
+    by_name = {item.get("name"): item for item in uploads if isinstance(item, dict)}
+    if resume_id:
+        baseline = baseline_for_resume(resume_id, system, version)
+    else:
+        for filename in ("component-metrics.csv", "smell-characteristics.csv", "smell-affects.csv"):
+            safe_upload(inputs / "baseline", by_name.get(filename, {}), filename)
+        validate_csv_inputs(inputs / "baseline", system, version)
+        baseline = inputs / "baseline"
+
+    pipeline_mode = "train"
+    predictions = ""
+    training = ""
+    extra = payload.get("extraFile")
+    if mode == "latest_predictions":
+        predictions = str(latest_compatible_predictions(system, version, pending_id))
+        pipeline_mode = "reuse_predictions"
+    elif mode == "predictions":
+        predictions = str(safe_upload(inputs, extra or {}, "predictions.csv"))
+        pipeline_mode = "reuse_predictions"
+    elif mode == "training":
+        training = str(safe_upload(inputs, extra or {}, "training.jsonl"))
+        pipeline_mode = "training"
+    elif mode == "full":
+        pipeline_mode = "fresh" if fresh_mining else "train"
+    else:
+        raise ValueError("Unknown run mode")
+
+    folder.mkdir(parents=True, exist_ok=True)
+    slurm_log_pattern = STATE / "slurm-%j.log"
+    environment = os.environ.copy()
+    environment.update({
+        "PROJECT_SPACE": str(HPC_PROJECT_SPACE), "PROJECT_ROOT": str(ROOT),
+        "SYSTEM": system, "REPOSITORY_URL": repository, "VERSION_ID": version,
+        "BASELINE_CSV_DIR": str(baseline), "PIPELINE_MODE": pipeline_mode,
+        "PREDICTIONS_CSV": predictions, "TRAINING_DATASET": training,
+        "SEVERITY_CATEGORIES": ",".join(categories), "BATCH_SIZE": str(batch_size),
+        "START_BATCH": str(start_batch), "MAX_BATCHES": str(max_batches),
+        "ALLOW_RISKY_CANDIDATES": "1" if allow_risky else "0",
+        "PROFILE": "log4j2" if system == "logging-log4j2" else "generic",
+    })
+    if resume_id:
+        environment.update({"RESUME_RUN_ID": resume_id, "START_STAGE": resume_stage})
+    command = ["sbatch", "--parsable", f"--output={slurm_log_pattern}", f"--error={slurm_log_pattern}",
+               "--export=ALL", str(HPC_SCRIPT)]
+    submitted = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
+                               text=True, timeout=30, check=False)
+    if submitted.returncode != 0:
+        raise RuntimeError(f"Slurm submission failed: {submitted.stderr.strip() or submitted.stdout.strip()}")
+    job_id = submitted.stdout.strip().split(";", 1)[0]
+    if not job_id.isdigit():
+        raise RuntimeError(f"Unexpected sbatch response: {submitted.stdout.strip()}")
+    # Keep the pre-submission folder name: its absolute input paths were already
+    # exported to Slurm and must remain stable even if the job starts instantly.
+    run_id = pending_id
+    log = STATE / f"slurm-{job_id}.log"
+    run_root = HPC_RUNS_ROOT / system / (resume_id or job_id)
+    meta = {
+        "id": run_id, "system": system, "repositoryUrl": repository, "versionId": version,
+        "mode": mode, "executionTarget": "hpc", "freshMining": fresh_mining,
+        "allowRiskyCandidates": allow_risky, "severityCategories": categories,
+        "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
+        "status": "queued", "stage": "queued", "createdAt": now(), "stageStartedAt": now(),
+        "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
+        "logFile": str(log), "slurmJobId": job_id, "logicalRunId": resume_id or job_id,
+        "resumeRunId": resume_id or None, "resumeStage": resume_stage or None,
+    }
+    atomic_json(metadata_path(run_id), meta)
+    return meta
+
+
+def start_run(payload: dict) -> dict:
+    if payload.get("executionTarget") == "hpc":
+        return start_hpc_run(payload)
+    system, repository, version = validate_identity(payload)
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     folder = RUNS / run_id
@@ -225,18 +434,7 @@ def start_run(payload: dict) -> dict:
         raise ValueError("Unknown run mode")
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky_candidates = bool(payload.get("allowRiskyCandidates", False))
-    severity_categories = payload.get("severityCategories", ["high", "medium", "low"])
-    if (not isinstance(severity_categories, list) or not severity_categories
-            or not set(severity_categories).issubset({"high", "medium", "low"})):
-        raise ValueError("Select one or more valid severity categories")
-    try:
-        batch_size = int(payload.get("batchSize", 10))
-        start_batch = int(payload.get("startBatch", 1))
-        max_batches = int(payload.get("maxBatches", 0))
-    except (TypeError, ValueError) as error:
-        raise ValueError("Batch size and maximum batches must be integers") from error
-    if not 1 <= batch_size <= 100 or start_batch < 1 or max_batches < 0:
-        raise ValueError("Batch size must be 1-100, start batch positive, and maximum batches nonnegative")
+    severity_categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
     if fresh_mining:
         if mode != "full":
             raise ValueError("Fresh mining is available only for the full workflow")
@@ -250,7 +448,7 @@ def start_run(payload: dict) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "pipeline.log"
     meta = {"id": run_id, "system": system, "repositoryUrl": repository, "versionId": version,
-            "mode": mode, "freshMining": fresh_mining,
+            "mode": mode, "executionTarget": "local", "freshMining": fresh_mining,
             "allowRiskyCandidates": allow_risky_candidates,
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
@@ -340,7 +538,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path); parts = [unquote(x) for x in parsed.path.split("/") if x]
         try:
-            if parsed.path == "/api/health": return self.json_response({"ok": True, "apiVersion": 2})
+            if parsed.path == "/api/health":
+                return self.json_response({"ok": True, "apiVersion": 3,
+                                           "executionMode": EXECUTION_MODE,
+                                           "hpcAvailable": hpc_available(),
+                                           "hpcProjectSpace": str(HPC_PROJECT_SPACE)})
             if parsed.path == "/api/runs":
                 values = [load_run(p.parent.name) for p in RUNS.glob("*/metadata.json")]
                 return self.json_response(sorted(values, key=lambda x: x["createdAt"], reverse=True))
@@ -381,7 +583,13 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "runs"]: return self.json_response(start_run(self.read_json()), 201)
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "stop":
                 data = load_run(parts[2]); process = PROCESSES.get(parts[2])
-                if process and process.poll() is None: os.killpg(process.pid, signal.SIGTERM)
+                if data.get("executionTarget") == "hpc" and data.get("status") in {"queued", "running"}:
+                    stopped = subprocess.run(["scancel", str(data["slurmJobId"])], capture_output=True,
+                                             text=True, timeout=15, check=False)
+                    if stopped.returncode != 0:
+                        raise RuntimeError(stopped.stderr.strip() or "Unable to cancel Slurm job")
+                elif process and process.poll() is None:
+                    os.killpg(process.pid, signal.SIGTERM)
                 data["status"] = "stopped"; data["finishedAt"] = now(); atomic_json(metadata_path(parts[2]), data)
                 return self.json_response(data)
             self.send_error(404)
@@ -392,13 +600,22 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global EXECUTION_MODE, HPC_PROJECT_SPACE, HPC_RUNS_ROOT
     parser = argparse.ArgumentParser(); parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765); args = parser.parse_args()
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--execution-mode", choices=("local", "hpc", "both"), default="local")
+    parser.add_argument("--hpc-project-space", type=Path, default=HPC_PROJECT_SPACE)
+    args = parser.parse_args()
+    EXECUTION_MODE = args.execution_mode
+    HPC_PROJECT_SPACE = args.hpc_project_space.resolve()
+    HPC_RUNS_ROOT = HPC_PROJECT_SPACE / "runs"
+    if EXECUTION_MODE in {"hpc", "both"} and not hpc_available():
+        parser.error("HPC mode requires sbatch, squeue, sacct, scancel and hpc/noctua_pipeline.sbatch")
     STATE.mkdir(parents=True, exist_ok=True); RUNS.mkdir(parents=True, exist_ok=True)
     ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
-    print(f"Dashboard: http://{args.host}:{args.port}")
+    print(f"Dashboard: http://{args.host}:{args.port} ({EXECUTION_MODE} execution)")
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close()

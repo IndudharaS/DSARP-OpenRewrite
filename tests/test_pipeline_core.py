@@ -9,11 +9,13 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 from evaluation.summarize_arcan import comparison
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
-from webui.server import detect_stage
+from webui.server import detect_stage, normalize_slurm_state, validate_batch_options
+import webui.server as dashboard
 
 
 class SuggestionTests(unittest.TestCase):
@@ -96,6 +98,52 @@ class EvidenceTests(unittest.TestCase):
             log.write_text("Stage: baseline\n" + "verbose output\n" * 1000)
             marker.write_text("Stage: final verification\n")
             self.assertEqual(detect_stage(log, marker), "final_verify")
+
+    def test_slurm_states_are_normalized_for_the_dashboard(self) -> None:
+        self.assertEqual(normalize_slurm_state("PENDING"), "queued")
+        self.assertEqual(normalize_slurm_state("RUNNING"), "running")
+        self.assertEqual(normalize_slurm_state("COMPLETED"), "completed")
+        self.assertEqual(normalize_slurm_state("CANCELLED by 1000"), "stopped")
+        self.assertEqual(normalize_slurm_state("OUT_OF_MEMORY"), "failed")
+
+    def test_hpc_batch_options_are_validated(self) -> None:
+        categories, size, start, maximum = validate_batch_options({
+            "severityCategories": ["high"], "batchSize": "12",
+            "startBatch": "2", "maxBatches": "3",
+        })
+        self.assertEqual((categories, size, start, maximum), (["high"], 12, 2, 3))
+        with self.assertRaises(ValueError):
+            validate_batch_options({"severityCategories": ["critical"]})
+
+    def test_hpc_submission_exports_inputs_without_running_pipeline_locally(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runs = root / "state" / "runs"
+            predictions = root / "predictions.csv"
+            predictions.write_text("architecture_smell,suggestions\ncycle,Move Class\n")
+            csvs = []
+            for name in ("component-metrics.csv", "smell-characteristics.csv", "smell-affects.csv"):
+                content = f"project,versionId\nlogging-log4j2,4f474b3\n"
+                csvs.append({"name": name, "data": __import__("base64").b64encode(content.encode()).decode()})
+            completed = subprocess.CompletedProcess(["sbatch"], 0, stdout="12345\n", stderr="")
+            with (mock.patch.object(dashboard, "RUNS", runs),
+                  mock.patch.object(dashboard, "STATE", root / "state"),
+                  mock.patch.object(dashboard, "HPC_PROJECT_SPACE", root / "scratch"),
+                  mock.patch.object(dashboard, "HPC_RUNS_ROOT", root / "scratch" / "runs"),
+                  mock.patch.object(dashboard, "EXECUTION_MODE", "hpc"),
+                  mock.patch.object(dashboard, "hpc_available", return_value=True),
+                  mock.patch.object(dashboard, "latest_compatible_predictions", return_value=predictions),
+                  mock.patch.object(dashboard.subprocess, "run", return_value=completed) as submit):
+                result = dashboard.start_hpc_run({
+                    "system": "logging-log4j2", "repositoryUrl": "https://example.test/repo.git",
+                    "versionId": "4f474b3", "mode": "latest_predictions",
+                    "baselineFiles": csvs, "severityCategories": ["high"],
+                    "batchSize": 10, "startBatch": 1, "maxBatches": 1,
+                })
+            self.assertEqual(result["slurmJobId"], "12345")
+            self.assertEqual(result["status"], "queued")
+            self.assertEqual(result["executionTarget"], "hpc")
+            self.assertEqual(submit.call_args.kwargs["env"]["PIPELINE_MODE"], "reuse_predictions")
 
 
 if __name__ == "__main__":

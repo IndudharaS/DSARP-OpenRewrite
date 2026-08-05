@@ -45,6 +45,12 @@ Open <http://127.0.0.1:8765>. For Logging-Log4j2, select the preset, upload the
 three baseline CSV files, keep fresh mining unchecked, and start a full run.
 The shared mining cache is reused automatically.
 
+On Noctua, start the Slurm-enabled interface with
+`scripts/run_web_dashboard.sh --hpc` and forward port 8765 over SSH. The same
+interface then submits compute jobs, reports queue/node status, streams logs,
+cancels jobs, resumes existing run IDs, and exposes completed artifacts. See
+[Noctua execution](hpc/README.md) for exact commands.
+
 ## Run from the CLI
 
 ```bash
@@ -89,7 +95,7 @@ See [generic pipeline documentation](scripts/README-generic-pipeline.md),
 - `ml/`: training-data preparation, inference and ranking evaluation.
 - `openrewrite/`: generic recipe generation and checked-in templates.
 - `evaluation/`: validation, provenance and before/after smell reporting.
-- `webui/`: local dashboard; generated run workspaces are ignored by Git.
+- `webui/`: local/Slurm dashboard; generated run workspaces are ignored by Git.
 - `shared/`: reusable local caches keyed by profile or system and commit.
 - `baseline_csv/`: the three baseline Arcan CSV inputs for the selected system.
 - `tests/`: fast project-level regression tests.

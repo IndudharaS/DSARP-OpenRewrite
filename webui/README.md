@@ -1,8 +1,8 @@
 # Refactoring Lab web dashboard
 
 The dashboard is a localhost-only interface for the generic Maven pipeline. It
-does not replace the CLI; it starts the same `run_generic_pipeline.sh` command
-with validated arguments and an isolated run directory.
+can execute locally or act as a lightweight Noctua control plane that submits
+the heavy pipeline to Slurm compute nodes.
 
 ## Start
 
@@ -50,6 +50,40 @@ must be Maven-based and include an executable `mvnw`.
 The built-in Logging-Log4j2 selection enables its API-compatibility validation
 profile automatically; other presets and custom systems use the generic Maven
 OpenRewrite executor.
+
+## Noctua HPC dashboard
+
+Start the server on `n2login1` from the scratch clone. The server only handles
+HTTP requests and Slurm commands; Maven, model and Arcan work runs in an
+allocated compute job.
+
+```bash
+cd /scratch/hpc-prf-dssecs/$USER/dsarp-openrewrite
+module reset
+module load lang
+module load Python/3.12.3-GCCcore-13.3.0
+export DSARP_PYTHON=/scratch/hpc-prf-dssecs/$USER/environments/dsarp-python-3.12/bin/python
+scripts/run_web_dashboard.sh --hpc
+```
+
+On the Mac, keep a second terminal open with this SSH tunnel (password-only
+configuration is supported):
+
+```bash
+ssh -N -L 8765:127.0.0.1:8765 n2login1
+```
+
+Then open <http://127.0.0.1:8765>. Choose **Noctua HPC (Slurm)**, select the
+workflow, severity categories and batches, upload the baseline CSVs, and press
+**Start experiment**. The UI displays the Slurm job ID, pending reason, compute
+node, pipeline stage, combined output/error log, results and artifacts. Closing
+the browser or losing SSH does not stop the Slurm job; reconnect the tunnel and
+open the dashboard again.
+
+To continue an existing logical run, select **Resume an existing HPC run**, enter
+the original run ID (for example `33917736`) and choose the first stage that
+must run. **Stop run** calls `scancel` for queued/running HPC jobs. The dashboard
+does not execute `sbatch` unless it was explicitly started with `--hpc`.
 
 ## Severity and batches
 
