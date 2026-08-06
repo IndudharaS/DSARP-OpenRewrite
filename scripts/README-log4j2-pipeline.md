@@ -200,9 +200,11 @@ runs/log4j2/
 ├── results/
 │   ├── arcan-supplied-baseline-summary.json
 │   ├── arcan-baseline-matched/
+│   │   ├── input-manifest.json
 │   │   ├── raw/
 │   │   └── summary.json
 │   ├── arcan-refactored/
+│   │   ├── input-manifest.json
 │   │   ├── raw/
 │   │   └── summary.json
 │   ├── arcan-comparison.json
@@ -224,6 +226,13 @@ runs/log4j2/
 │   └── refactored-verify.log
 └── notebooks/                 # Used by --full
 ```
+
+Each `input-manifest.json` contains the sorted relative path, size, and SHA-256
+digest of every compiled class analyzed by Arcan. The comparison is marked as
+causal evidence only when the pinned Arcan version and configuration match and
+the before/after class-path populations differ by no more than 1% (with a
+minimum allowance of five paths for legitimate small refactorings). Cycle rows
+are canonicalized and deduplicated before aggregate counts are compared.
 
 No Git commit is created automatically.
 

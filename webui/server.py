@@ -601,7 +601,11 @@ def result_summary(data: dict) -> dict:
         "results/generated-openrewrite/manifest.csv",
         "results/openrewrite-validation/validation-report.csv",
         "results/arcan-comparison.csv", "results/arcan-comparison.json",
-        "results/experiment-report.json", "results/arcan-refactored/summary.json",
+        "results/experiment-report.json",
+        "results/arcan-baseline-matched/input-manifest.json",
+        "results/arcan-baseline-matched/summary.json",
+        "results/arcan-refactored/input-manifest.json",
+        "results/arcan-refactored/summary.json",
     ]
     run_root = Path(data["runRoot"])
     output["artifacts"] = [

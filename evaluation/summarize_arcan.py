@@ -7,6 +7,7 @@ import argparse
 import ast
 import csv
 import json
+import math
 from pathlib import Path
 
 
@@ -16,19 +17,26 @@ def rows(path: Path) -> list[dict[str, str]]:
 
 
 def cycles(path: Path) -> list[list[str]]:
-    result = []
+    result: set[tuple[str, ...]] = set()
     with path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.reader(handle)
         header = next(reader, [])
         members = header[1:]
         for row in reader:
-            result.append(sorted(name for name, flag in zip(members, row[1:]) if flag == "1"))
-    return result
+            cycle = tuple(sorted(name for name, flag in zip(members, row[1:]) if flag == "1"))
+            if cycle:
+                result.add(cycle)
+    return [list(cycle) for cycle in sorted(result)]
 
 
-def summarize(directory: Path, compiled_classes: int | None = None) -> dict[str, object]:
+def summarize(
+    directory: Path,
+    compiled_classes: int | None = None,
+    input_manifest: Path | None = None,
+) -> dict[str, object]:
     package_cycles = cycles(directory / "packageCyclicDependencyTable.csv")
     class_cycles = cycles(directory / "classCyclicDependencyTable.csv")
+    manifest = json.loads(input_manifest.read_text(encoding="utf-8")) if input_manifest else None
     return {
         "tool": "Arcan",
         "version": "1.2.1",
@@ -43,6 +51,8 @@ def summarize(directory: Path, compiled_classes: int | None = None) -> dict[str,
         "class_metrics_records": len(rows(directory / "CM.csv")),
         "package_cycle_members": package_cycles,
         "class_cycle_members": class_cycles,
+        "input_manifest_fingerprint": manifest.get("fingerprint") if manifest else None,
+        "compiled_class_paths": [item["path"] for item in manifest.get("classes", [])] if manifest else None,
     }
 
 
@@ -138,7 +148,31 @@ def comparison(before: dict[str, object], after: dict[str, object]) -> dict[str,
         before.get("analysis_configuration") is not None
         and before.get("analysis_configuration") == after.get("analysis_configuration")
     )
-    comparable = same_version and same_configuration
+    before_paths = set(before.get("compiled_class_paths") or [])
+    after_paths = set(after.get("compiled_class_paths") or [])
+    added_paths = sorted(after_paths - before_paths)
+    removed_paths = sorted(before_paths - after_paths)
+    if before_paths and after_paths:
+        population_limit = max(5, math.ceil(len(before_paths) * 0.01))
+        population_difference = len(added_paths) + len(removed_paths)
+        population_compatible = population_difference <= population_limit
+        population_basis = "compiled-class-path-manifest"
+    else:
+        old_count, new_count = before.get("compiled_classes"), after.get("compiled_classes")
+        population_limit = max(5, math.ceil(old_count * 0.01)) if isinstance(old_count, int) else 0
+        population_difference = abs(new_count - old_count) if isinstance(old_count, int) and isinstance(new_count, int) else None
+        population_compatible = population_difference is not None and population_difference <= population_limit
+        population_basis = "compiled-class-count-fallback"
+    comparable = same_version and same_configuration and population_compatible
+    warning_reasons = []
+    if not same_version:
+        warning_reasons.append("Arcan versions differ")
+    if not same_configuration:
+        warning_reasons.append("analysis configurations differ")
+    if not population_compatible:
+        warning_reasons.append(
+            f"compiled-class populations differ by {population_difference} entries (limit {population_limit})"
+        )
     return {
         "tool": "Arcan",
         "baseline_version": before.get("version"),
@@ -146,9 +180,16 @@ def comparison(before: dict[str, object], after: dict[str, object]) -> dict[str,
         "baseline_configuration": before.get("analysis_configuration"),
         "refactored_configuration": after.get("analysis_configuration"),
         "aggregate_counts_comparable": comparable,
+        "population_comparison": {
+            "basis": population_basis,
+            "compatible": population_compatible,
+            "difference": population_difference,
+            "allowed_difference": population_limit,
+            "added_class_paths": added_paths,
+            "removed_class_paths": removed_paths,
+        },
         "comparison_warning": None if comparable else (
-            "Baseline and refactored reports do not prove identical Arcan version and analysis configuration; "
-            "aggregate deltas are not valid causal evidence."
+            "Aggregate deltas are not valid causal evidence: " + "; ".join(warning_reasons) + "."
         ),
         "metrics": compared,
     }
@@ -161,6 +202,7 @@ def main() -> None:
     one.add_argument("raw_directory", type=Path)
     one.add_argument("--output", required=True, type=Path)
     one.add_argument("--compiled-classes", type=int)
+    one.add_argument("--input-manifest", type=Path)
     baseline = subparsers.add_parser("baseline-csv")
     baseline.add_argument("csv_directory", type=Path)
     baseline.add_argument("--output", required=True, type=Path)
@@ -171,7 +213,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "summarize":
-        result = summarize(args.raw_directory, args.compiled_classes)
+        result = summarize(args.raw_directory, args.compiled_classes, args.input_manifest)
     elif args.command == "baseline-csv":
         result = summarize_baseline(args.csv_directory)
     else:

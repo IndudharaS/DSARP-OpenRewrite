@@ -11,7 +11,7 @@ from argparse import Namespace
 from pathlib import Path
 from unittest import mock
 
-from evaluation.summarize_arcan import comparison
+from evaluation.summarize_arcan import comparison, cycles
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from webui.server import detect_stage, normalize_slurm_state, read_json_file, validate_batch_options
@@ -65,12 +65,40 @@ class SuggestionTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_arcan_cycles_are_canonicalized_and_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "cycles.csv"
+            path.write_text(
+                "cycle,A,B,C\nfirst,1,1,0\nsecond,1,1,0\nthird,0,1,1\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(cycles(path), [["A", "B"], ["B", "C"]])
+
     def test_arcan_comparison_requires_matching_configuration(self) -> None:
         base = {"version": "1.2.1", "analysis_configuration": "a",
                 "package_cycle_members": [], "class_cycle_members": []}
         result = comparison(base, {**base, "analysis_configuration": "b"})
         self.assertFalse(result["aggregate_counts_comparable"])
         self.assertIsNotNone(result["comparison_warning"])
+
+    def test_arcan_comparison_checks_compiled_class_population(self) -> None:
+        base = {
+            "version": "1.2.1", "analysis_configuration": "a",
+            "compiled_classes": 100, "compiled_class_paths": [f"C{i}.class" for i in range(100)],
+            "package_cycle_members": [], "class_cycle_members": [],
+        }
+        compatible = comparison(base, {
+            **base, "compiled_classes": 101,
+            "compiled_class_paths": [*base["compiled_class_paths"], "Added.class"],
+        })
+        self.assertTrue(compatible["aggregate_counts_comparable"])
+        self.assertEqual(compatible["population_comparison"]["difference"], 1)
+        incompatible = comparison(base, {
+            **base, "compiled_classes": 120,
+            "compiled_class_paths": [f"Other{i}.class" for i in range(120)],
+        })
+        self.assertFalse(incompatible["aggregate_counts_comparable"])
+        self.assertIn("compiled-class populations differ", incompatible["comparison_warning"])
 
     def test_failure_classifier(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

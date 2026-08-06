@@ -137,6 +137,7 @@ def main() -> None:
         },
         "smell_evaluation": {
             "matched_configuration": comparable,
+            "population_comparison": comparison.get("population_comparison"),
             "conclusion": conclusion,
             "causal_claim_allowed": causal_claim_allowed,
             "note": note,

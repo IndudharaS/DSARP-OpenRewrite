@@ -70,6 +70,32 @@ done < <(find "$REPOSITORY" -type d -path '*/target/classes' -print0)
 }
 
 printf 'Arcan input: %s compiled classes\n' "$class_count" | tee "$OUTPUT_DIR/input-summary.txt"
+"$PYTHON" - "$OUTPUT_DIR/input-classes" "$OUTPUT_DIR/input-manifest.json" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+output = Path(sys.argv[2])
+records = []
+aggregate = hashlib.sha256()
+for path in sorted(root.rglob("*.class"), key=lambda value: value.as_posix()):
+    relative = path.relative_to(root).as_posix()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    record = {"path": relative, "size": path.stat().st_size, "sha256": digest}
+    records.append(record)
+    aggregate.update(relative.encode("utf-8"))
+    aggregate.update(b"\0")
+    aggregate.update(digest.encode("ascii"))
+    aggregate.update(b"\n")
+output.write_text(json.dumps({
+    "schema_version": 1,
+    "class_count": len(records),
+    "fingerprint": aggregate.hexdigest(),
+    "classes": records,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
 "$JAVA_HOME_VALUE/bin/java" \
   -cp "$ARCAN_HOME/arcan-1.2.1.jar:$ARCAN_HOME/lib/*" \
   it.unimib.disco.essere.main.TerminalExecutor \
@@ -86,7 +112,8 @@ done
 
 "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" \
   summarize "$OUTPUT_DIR/raw" --output "$OUTPUT_DIR/summary.json" \
-  --compiled-classes "$class_count" >/dev/null
+  --compiled-classes "$class_count" \
+  --input-manifest "$OUTPUT_DIR/input-manifest.json" >/dev/null
 
 echo "Arcan reports: $OUTPUT_DIR/raw"
 echo "Arcan summary: $OUTPUT_DIR/summary.json"
