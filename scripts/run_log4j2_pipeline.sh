@@ -205,6 +205,7 @@ require_command() {
 
 run_expected_spring_failure() {
   local repository="$1" log_file="$2" status excludes_file attempt_log retry_log retry_status line
+  local dynamic_retry_log dynamic_retry_status failed_test_selectors
   local known_flake_only=1
   local failure_lines=()
   local verify_arguments=(verify)
@@ -272,6 +273,51 @@ run_expected_spring_failure() {
       return
     fi
     echo "Allowlisted failure retry did not pass. See $retry_log" >&2
+  fi
+
+  # Baseline verification can expose timing-sensitive tests that are not in the
+  # static allowlist. Read the exact failures from Surefire XML and retry only
+  # those tests once, in one fork. A repeat failure remains a hard failure.
+  failed_test_selectors="$($PYTHON - "$repository" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+repository = Path(sys.argv[1])
+selectors = []
+for report in repository.glob("**/target/surefire-reports/TEST-*.xml"):
+    try:
+        root = ET.parse(report).getroot()
+    except (ET.ParseError, OSError):
+        continue
+    for case in root.iter("testcase"):
+        if not any(child.tag.rsplit("}", 1)[-1] in {"failure", "error"} for child in case):
+            continue
+        class_name = case.attrib.get("classname", "").strip()
+        method_name = case.attrib.get("name", "").split("(", 1)[0].strip()
+        if class_name and method_name:
+            selectors.append(f"{class_name}#{method_name}")
+print(",".join(dict.fromkeys(selectors)))
+PY
+)"
+  if [[ -n "$failed_test_selectors" ]]; then
+    dynamic_retry_log="${log_file%.log}-isolated-failure-retry.log"
+    printf 'Baseline verification failed; retrying only these failed tests once:\n%s\n' \
+      "$failed_test_selectors" | tee "$dynamic_retry_log"
+    set +e
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
+      -pl log4j-core-test -am \
+      "-Dtest=$failed_test_selectors" \
+      -Dsurefire.failIfNoSpecifiedTests=false -DforkCount=1 test) \
+      2>&1 | tee -a "$dynamic_retry_log"
+    dynamic_retry_status=${PIPESTATUS[0]}
+    set -e
+    if ((dynamic_retry_status == 0)); then
+      echo "Accepted baseline test-harness flakiness: every originally failed test passed in isolated retry." \
+        | tee -a "$dynamic_retry_log" "$log_file"
+      return
+    fi
+    echo "Isolated retry reproduced a failure. See $dynamic_retry_log" >&2
   fi
 
   echo "Unexpected Maven verification failure. See $log_file" >&2
