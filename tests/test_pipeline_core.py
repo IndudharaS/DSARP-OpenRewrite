@@ -12,9 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from evaluation.summarize_arcan import comparison
-from evaluation.validate_openrewrite_candidates import (
-    affected_maven_projects, classify_failure, has_compatibility_strategy,
-)
+from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from webui.server import detect_stage, normalize_slurm_state, read_json_file, validate_batch_options
 import webui.server as dashboard
@@ -86,15 +84,6 @@ class EvidenceTests(unittest.TestCase):
         supported = {"source_type": "org.apache.logging.log4j.core.appender.rolling.FileSize"}
         self.assertFalse(has_compatibility_strategy(ordinary, "generic"))
         self.assertTrue(has_compatibility_strategy(supported, "log4j2"))
-
-    def test_changed_files_resolve_to_nearest_maven_modules(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repository = Path(temporary)
-            module = repository / "parent" / "child"
-            (module / "src" / "main" / "java").mkdir(parents=True)
-            (module / "pom.xml").write_text("<project/>")
-            changed = ["parent/child/src/main/java/Example.java"]
-            self.assertEqual(affected_maven_projects(repository, changed), ["parent/child"])
 
     def test_stage_detection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

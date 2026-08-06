@@ -114,24 +114,6 @@ sbatch --export=ALL,SEVERITY_CATEGORIES=high,BATCH_SIZE=10,START_BATCH=2,MAX_BAT
 `MAX_BATCHES=0` processes every remaining batch. Every Slurm job writes to its
 own run directory named by `SLURM_JOB_ID`.
 
-## Parallel all-candidate validation
-
-Noctua jobs default to four isolated candidate workers and four Maven reactor
-threads per worker. Candidate worktrees and their `target/` directories are
-placed on compute-node-local storage; durable evidence remains in the run
-directory on `/scratch`. All independently passing recipes are then combined
-and receive one clean full-project verification and matched Arcan analysis.
-
-```bash
-sbatch --export=ALL,SEVERITY_CATEGORIES=high,BATCH_SIZE=10,START_BATCH=1,MAX_BATCHES=0,PARALLEL_WORKERS=4 \
-  hpc/noctua_pipeline.sbatch
-```
-
-Here `MAX_BATCHES=0` means all remaining candidates. Increase workers
-cautiously because every worker executes OpenRewrite and Maven. Four is the
-default for the 32-CPU, 64-GiB job. GPUs are useful for model training and
-inference, but not Java compilation, OpenRewrite, Maven tests or Arcan.
-
 Resume an existing run at a named pipeline stage without repeating completed
 work:
 

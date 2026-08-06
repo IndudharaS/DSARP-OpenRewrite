@@ -8,8 +8,6 @@ import csv
 import json
 import os
 import subprocess
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
@@ -78,19 +76,6 @@ def source_changes(repository: Path) -> list[str]:
     return sorted(set(changed))
 
 
-def affected_maven_projects(repository: Path, changed_files: list[str]) -> list[str]:
-    """Return the nearest Maven modules containing changed files."""
-    projects: set[str] = set()
-    for changed in changed_files:
-        path = (repository / changed).parent
-        while path != repository and repository in path.parents:
-            if (path / "pom.xml").is_file():
-                projects.add(str(path.relative_to(repository)))
-                break
-            path = path.parent
-    return sorted(projects)
-
-
 def classify_failure(log: Path, fallback: str) -> tuple[str, str]:
     """Turn Maven/OpenRewrite output into a useful, stable failure category."""
     text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
@@ -117,113 +102,6 @@ def has_compatibility_strategy(record: dict[str, object], profile: str) -> bool:
     )
 
 
-WORKTREE_LOCK = threading.Lock()
-
-
-def validate_candidate(
-    record: dict[str, object], *, repository: Path, generated: Path, output: Path,
-    worktrees: Path, rewrite_runner: Path, java_home: Path, environment: dict[str, str],
-    compatibility_profile: str, allow_risky_candidates: bool, batch_number: int,
-) -> tuple[dict[str, object], dict[str, object] | None]:
-    """Validate one candidate in an isolated worktree and return its evidence."""
-    prediction = int(record["prediction_id"])
-    worktree = worktrees / f"prediction-{prediction:04d}"
-    recipe = generated / str(record["recipe_file"])
-    log_dir = output / "logs" / f"prediction-{prediction:04d}"
-    if (not allow_risky_candidates and record.get("risk_level") == "high_public_api"
-            and not has_compatibility_strategy(record, compatibility_profile)):
-        return ({
-            **record, "batch_number": batch_number, "validation_status": "manual_review",
-            "failure_category": "missing_compatibility_strategy",
-            "validation_reason": (
-                "Public API move was not executed automatically; provide a project-specific "
-                "binary/source compatibility strategy first"
-            ), "diagnostic_log": "", "changed_files": [],
-        }, None)
-    if worktree.exists():
-        return ({
-            **record, "batch_number": batch_number, "validation_status": "failed",
-            "failure_category": "worktree", "validation_reason": "validation worktree already exists",
-            "diagnostic_log": "", "changed_files": [],
-        }, None)
-    # Git serializes worktree metadata updates. The expensive rewrite and Maven
-    # work remains parallel after this short critical section.
-    with WORKTREE_LOCK:
-        added = run(["git", "-C", str(repository), "worktree", "add", "--detach",
-                     str(worktree), "HEAD"], log=log_dir / "worktree.log")
-    status, reason, category = "failed", "could not create validation worktree", "worktree"
-    diagnostic_log = log_dir / "worktree.log"
-    changed_files: list[str] = []
-    validation_scope = "none"
-    try:
-        if added == 0:
-            rewrite = run([
-                str(rewrite_runner.resolve()), "--repository", str(worktree),
-                "--java-home", str(java_home.resolve()), "--recipe", str(recipe),
-                "--active-recipe", str(record["recipe_name"]),
-                "--results-dir", str(log_dir / "rewrite-results"),
-                "--log-dir", str(log_dir), "--mode", "apply",
-            ], log=log_dir / "runner-console.log", env=environment)
-            compatibility_status, format_status, verify_status = 0, 1, 1
-            changed_files = source_changes(worktree) if rewrite == 0 else []
-            changed = bool(changed_files)
-            if changed:
-                if (compatibility_profile == "log4j2" and record["source_type"] ==
-                        "org.apache.logging.log4j.core.appender.rolling.FileSize"):
-                    compatibility_status = run([
-                        str(rewrite_runner.resolve()), "--repository", str(worktree),
-                        "--java-home", str(java_home.resolve()), "--recipe", str(recipe),
-                        "--active-recipe", str(record["recipe_name"]),
-                        "--results-dir", str(log_dir / "rewrite-results"),
-                        "--log-dir", str(log_dir), "--mode", "compatibility",
-                    ], log=log_dir / "compatibility-console.log", env=environment)
-                if compatibility_status == 0:
-                    if uses_spotless(worktree):
-                        format_status = run(["./mvnw", "-DskipTests", "spotless:apply"],
-                                            cwd=worktree, log=log_dir / "spotless.log", env=environment)
-                    else:
-                        (log_dir / "spotless.log").write_text(
-                            "Spotless is not configured; formatting was skipped.\n", encoding="utf-8")
-                        format_status = 0
-                if format_status == 0:
-                    maven_threads = environment.get("DSARP_MAVEN_THREADS", "").strip()
-                    parallel = ["-T", maven_threads] if maven_threads else []
-                    projects = affected_maven_projects(worktree, changed_files)
-                    project_args = ["-pl", ",".join(projects), "-am"] if projects else []
-                    validation_scope = "affected_modules:" + ",".join(projects) if projects else "full_reactor"
-                    verify_status = run(["./mvnw", *parallel, *project_args, "-DskipTests", "verify"], cwd=worktree,
-                                        log=log_dir / "verify.log", env=environment)
-            if rewrite == 0 and changed and compatibility_status == 0 and format_status == 0 and verify_status == 0:
-                status, reason, category = "validated", "OpenRewrite application, formatting, and affected-module Maven verification passed", "validated"
-                diagnostic_log = log_dir / "verify.log"
-            elif rewrite != 0:
-                diagnostic_log = log_dir / "runner-console.log"
-                category, reason = classify_failure(diagnostic_log, "OpenRewrite application failed")
-            elif not changed:
-                status, reason, category = "not_applicable", "recipe made no source changes at the selected commit", "no_source_change"
-                diagnostic_log = log_dir / "runner-console.log"
-            elif compatibility_status != 0:
-                diagnostic_log = log_dir / "compatibility-console.log"
-                category, reason = classify_failure(diagnostic_log, "public-API compatibility installation failed")
-            elif format_status != 0:
-                diagnostic_log = log_dir / "spotless.log"
-                category, reason = classify_failure(diagnostic_log, "post-rewrite formatting failed")
-            else:
-                diagnostic_log = log_dir / "verify.log"
-                category, reason = classify_failure(diagnostic_log, "post-rewrite Maven verification failed")
-    finally:
-        if worktree.exists():
-            with WORKTREE_LOCK:
-                run(["git", "-C", str(repository), "worktree", "remove", "--force", str(worktree)])
-    result = {
-        **record, "batch_number": batch_number, "validation_status": status,
-        "failure_category": category, "validation_reason": reason,
-        "diagnostic_log": str(diagnostic_log.relative_to(output)), "changed_files": changed_files,
-        "validation_scope": validation_scope,
-    }
-    return result, record if status == "validated" else None
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True, type=Path)
@@ -247,10 +125,8 @@ def main() -> None:
                         help="one-based first batch to execute (default: 1)")
     parser.add_argument("--max-batches", type=int, default=0,
                         help="maximum batches to execute; 0 processes every batch")
-    parser.add_argument("--parallel-workers", type=int, default=1,
-                        help="isolated candidates to validate concurrently (default: 1)")
     args = parser.parse_args()
-    if args.batch_size < 1 or args.start_batch < 1 or args.max_batches < 0 or args.parallel_workers < 1:
+    if args.batch_size < 1 or args.start_batch < 1 or args.max_batches < 0:
         parser.error("batch size/start must be positive and --max-batches cannot be negative")
 
     repository = args.repository.resolve()
@@ -265,10 +141,8 @@ def main() -> None:
                          -int(row.get("severity_score") or 0), int(row["prediction_id"])),
     )
     results, validated = [], []
-    configured_worktree_root = os.environ.get("DSARP_VALIDATION_WORKTREE_ROOT", "").strip()
-    worktrees = Path(configured_worktree_root).resolve() if configured_worktree_root else output / "worktrees"
+    worktrees = output / "worktrees"
     worktrees.mkdir(exist_ok=True)
-    run(["git", "-C", str(repository), "worktree", "prune"])
 
     # OpenRewrite's Maven goal is an aggregator. In some multi-module builds it
     # resolves reactor SNAPSHOT dependencies before the lifecycle goals that
@@ -276,15 +150,13 @@ def main() -> None:
     # candidate failures reflect the recipe itself, not missing local artifacts.
     environment = os.environ.copy()
     environment["JAVA_HOME"] = str(args.java_home.resolve())
-    maven_threads = os.environ.get("DSARP_MAVEN_THREADS", "").strip()
-    maven_parallel = ["-T", maven_threads] if maven_threads else []
     prepare_log = output / "dependency-preparation.log"
     if args.skip_dependency_preparation:
         prepare_log.write_text("Dependency preparation explicitly skipped.\n", encoding="utf-8")
         prepare_status = 0
     else:
         prepare_status = run(
-            ["./mvnw", *maven_parallel, "-DskipTests", "install"],
+            ["./mvnw", "-DskipTests", "install"],
             cwd=repository,
             log=prepare_log,
             env=environment,
@@ -299,66 +171,113 @@ def main() -> None:
     end_index = start_index + args.batch_size * args.max_batches if args.max_batches else len(candidates)
     executed_candidates = candidates[start_index:end_index]
     deferred_candidates = candidates[:start_index] + candidates[end_index:]
-    selection_report = {
-        "generated_candidate_count": len(candidates),
-        "selected_candidate_count": len(executed_candidates),
-        "deferred_candidate_count": len(deferred_candidates),
-        "batch_size": args.batch_size,
-        "start_batch": args.start_batch,
-        "configured_max_batches": args.max_batches,
-        "parallel_workers": args.parallel_workers,
-        "records": [
-            {**record, "batch_number": position // args.batch_size + 1,
-             "selection_status": "selected_for_validation"}
-            for position, record in enumerate(candidates)
-            if start_index <= position < end_index
-        ],
-    }
-    (output / "selection-report.json").write_text(
-        json.dumps(selection_report, indent=2) + "\n", encoding="utf-8")
 
-    print(f"Executing {len(executed_candidates)} of {len(candidates)} generated candidates "
-          f"with {args.parallel_workers} parallel worker(s).", flush=True)
-    with ThreadPoolExecutor(max_workers=args.parallel_workers) as executor:
-        futures = {}
-        for ordinal, (position, record) in enumerate(
-                zip(range(start_index, start_index + len(executed_candidates)), executed_candidates), start=1):
-            batch_number = position // args.batch_size + 1
-            print(f"Queued validation candidate {ordinal}/{len(executed_candidates)} "
-                  f"(prediction {record['prediction_id']}, batch {batch_number}, severity {record.get('severity')})",
-                  flush=True)
-            future = executor.submit(
-                validate_candidate, record, repository=repository, generated=generated, output=output,
-                worktrees=worktrees, rewrite_runner=args.rewrite_runner, java_home=args.java_home,
-                environment=environment, compatibility_profile=args.compatibility_profile,
-                allow_risky_candidates=args.allow_risky_candidates, batch_number=batch_number,
-            )
-            futures[future] = (ordinal, record)
-        completed = 0
-        for future in as_completed(futures):
-            ordinal, record = futures[future]
-            try:
-                result, accepted = future.result()
-            except Exception as error:  # Preserve the remaining batch and its evidence.
-                result, accepted = ({
-                    **record,
-                    "batch_number": (start_index + ordinal - 1) // args.batch_size + 1,
-                    "validation_status": "failed",
-                    "failure_category": "validator_internal_error",
-                    "validation_reason": f"candidate validator raised {type(error).__name__}: {error}",
-                    "diagnostic_log": "",
-                    "changed_files": [],
-                    "validation_scope": "none",
-                }, None)
-            results.append(result)
-            if accepted is not None:
-                validated.append(accepted)
-            completed += 1
-            print(f"Completed validation {completed}/{len(executed_candidates)}: prediction "
-                  f"{record['prediction_id']} -> {result['validation_status']}", flush=True)
+    for position, record in enumerate(executed_candidates, start=start_index):
+        batch_number = position // args.batch_size + 1
+        print(f"Validation batch {batch_number}: candidate {position - start_index + 1}/{len(executed_candidates)} ",
+              f"(prediction {record['prediction_id']}, severity {record.get('severity', 'unknown')})",
+              flush=True)
+        prediction = int(record["prediction_id"])
+        worktree = worktrees / f"prediction-{prediction:04d}"
+        recipe = generated / str(record["recipe_file"])
+        log_dir = output / "logs" / f"prediction-{prediction:04d}"
+        if (not args.allow_risky_candidates
+                and record.get("risk_level") == "high_public_api" and not has_compatibility_strategy(
+            record, args.compatibility_profile
+        )):
+            results.append({
+                **record,
+                "batch_number": batch_number,
+                "validation_status": "manual_review",
+                "failure_category": "missing_compatibility_strategy",
+                "validation_reason": (
+                    "Public API move was not executed automatically; provide a project-specific "
+                    "binary/source compatibility strategy first"
+                ),
+                "diagnostic_log": "",
+            })
+            continue
+        if worktree.exists():
+            raise SystemExit(f"Validation worktree already exists: {worktree}")
+        added = run(["git", "-C", str(repository), "worktree", "add", "--detach",
+                     str(worktree), "HEAD"], log=log_dir / "worktree.log")
+        status, reason, category = "failed", "could not create validation worktree", "worktree"
+        diagnostic_log = log_dir / "worktree.log"
+        changed_files: list[str] = []
+        if added == 0:
+            rewrite = run([
+                str(args.rewrite_runner.resolve()), "--repository", str(worktree),
+                "--java-home", str(args.java_home.resolve()), "--recipe", str(recipe),
+                "--active-recipe", str(record["recipe_name"]),
+                "--results-dir", str(log_dir / "rewrite-results"),
+                "--log-dir", str(log_dir), "--mode", "apply",
+            ], log=log_dir / "runner-console.log")
+            compatibility_status = 0
+            format_status = 1
+            verify_status = 1
+            changed_files = source_changes(worktree) if rewrite == 0 else []
+            changed = bool(changed_files)
+            if changed:
 
-    results.sort(key=lambda row: int(row["prediction_id"]))
-    validated.sort(key=lambda row: int(row["prediction_id"]))
+                # FileSize is a published Log4j2 API. Its move is valid only with the
+                # compatibility facade supplied by the experiment runner.
+                if (args.compatibility_profile == "log4j2" and
+                        record["source_type"] == "org.apache.logging.log4j.core.appender.rolling.FileSize"):
+                    compatibility_status = run([
+                        str(args.rewrite_runner.resolve()), "--repository", str(worktree),
+                        "--java-home", str(args.java_home.resolve()), "--recipe", str(recipe),
+                        "--active-recipe", str(record["recipe_name"]),
+                        "--results-dir", str(log_dir / "rewrite-results"),
+                        "--log-dir", str(log_dir), "--mode", "compatibility",
+                    ], log=log_dir / "compatibility-console.log")
+
+                if compatibility_status == 0:
+                    if uses_spotless(worktree):
+                        format_status = run(
+                            ["./mvnw", "-DskipTests", "spotless:apply"],
+                            cwd=worktree, log=log_dir / "spotless.log", env=environment,
+                        )
+                    else:
+                        (log_dir / "spotless.log").write_text(
+                            "Spotless is not configured; formatting was skipped.\n", encoding="utf-8"
+                        )
+                        format_status = 0
+                if format_status == 0:
+                    verify_status = run(
+                        ["./mvnw", "-DskipTests", "verify"],
+                        cwd=worktree, log=log_dir / "verify.log", env=environment,
+                    )
+
+            if rewrite == 0 and changed and compatibility_status == 0 and format_status == 0 and verify_status == 0:
+                status, reason = "validated", "OpenRewrite application, formatting, and Maven verification passed"
+                category = "validated"
+                diagnostic_log = log_dir / "verify.log"
+                validated.append(record)
+            elif rewrite != 0:
+                diagnostic_log = log_dir / "runner-console.log"
+                category, reason = classify_failure(diagnostic_log, "OpenRewrite application failed")
+            elif not changed:
+                status, reason, category = "not_applicable", "recipe made no source changes at the selected commit", "no_source_change"
+                diagnostic_log = log_dir / "runner-console.log"
+            elif compatibility_status != 0:
+                diagnostic_log = log_dir / "compatibility-console.log"
+                category, reason = classify_failure(diagnostic_log, "public-API compatibility installation failed")
+            elif format_status != 0:
+                diagnostic_log = log_dir / "spotless.log"
+                category, reason = classify_failure(diagnostic_log, "post-rewrite formatting failed")
+            else:
+                diagnostic_log = log_dir / "verify.log"
+                category, reason = classify_failure(diagnostic_log, "post-rewrite Maven verification failed")
+            run(["git", "-C", str(repository), "worktree", "remove", "--force", str(worktree)])
+        results.append({
+            **record,
+            "batch_number": batch_number,
+            "validation_status": status,
+            "failure_category": category,
+            "validation_reason": reason,
+            "diagnostic_log": str(diagnostic_log.relative_to(output)),
+            "changed_files": changed_files,
+        })
 
     executed_ids = {int(record["prediction_id"]) for record in executed_candidates}
     for position, record in enumerate(candidates):
@@ -374,8 +293,6 @@ def main() -> None:
             "changed_files": [],
         })
 
-    results.sort(key=lambda row: int(row["prediction_id"]))
-
     (output / "validated-candidates.yml").write_text(aggregate(validated), encoding="utf-8")
     status_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
@@ -386,18 +303,13 @@ def main() -> None:
         category_counts[category] = category_counts.get(category, 0) + 1
     report = {
         "candidate_count": len(candidates),
-        "selected_candidate_count": len(executed_candidates),
-        "executed_candidate_count": (
-            status_counts.get("validated", 0) + status_counts.get("failed", 0)
-            + status_counts.get("not_applicable", 0)
-        ),
+        "executed_candidate_count": len(executed_candidates),
         "deferred_candidate_count": len(deferred_candidates),
         "batch_size": args.batch_size,
         "start_batch": args.start_batch,
         "configured_max_batches": args.max_batches,
         "total_batches": (len(candidates) + args.batch_size - 1) // args.batch_size,
         "executed_batches": (len(executed_candidates) + args.batch_size - 1) // args.batch_size,
-        "parallel_workers": args.parallel_workers,
         "validated_count": status_counts.get("validated", 0),
         "failed_count": status_counts.get("failed", 0),
         "not_applicable_count": status_counts.get("not_applicable", 0),
@@ -412,7 +324,6 @@ def main() -> None:
                   "source_type", "destination_type", "model_rank", "model_score",
                   "candidate_score", "risk_level", "validation_status", "failure_category",
                   "validation_reason", "diagnostic_log", "changed_files"]
-        fields.append("validation_scope")
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader(); writer.writerows(results)
     print(json.dumps({key: value for key, value in report.items() if key != "records"}, indent=2))

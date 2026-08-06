@@ -43,12 +43,6 @@ export DSARP_MAVEN_TEST_EXCLUDES="**/FileAppenderPermissionsTest.*"
 # Several Log4j 1.x compatibility tests write the same target/temp.A* files.
 # A single Surefire fork prevents cross-process races on high-core-count nodes.
 export DSARP_MAVEN_FORK_COUNT="1"
-# Four candidate workers × four Maven reactor threads uses at most the 32-core
-# allocation while retaining headroom for OpenRewrite and filesystem work.
-export DSARP_MAVEN_THREADS="${DSARP_MAVEN_THREADS:-4}"
-# Candidate source trees and Maven target directories contain many small files;
-# placing them on node-local storage avoids parallel-filesystem metadata cost.
-export DSARP_VALIDATION_WORKTREE_ROOT="${TMPDIR:-/tmp}/dsarp-validation-$SLURM_JOB_ID"
 
 SYSTEM="${SYSTEM:-logging-log4j2}"
 REPOSITORY_URL="${REPOSITORY_URL:-https://github.com/apache/logging-log4j2.git}"
@@ -58,8 +52,7 @@ BASELINE_CSV_DIR="${BASELINE_CSV_DIR:-$PROJECT_ROOT/baseline_csv}"
 SEVERITY_CATEGORIES="${SEVERITY_CATEGORIES:-high}"
 BATCH_SIZE="${BATCH_SIZE:-10}"
 START_BATCH="${START_BATCH:-1}"
-MAX_BATCHES="${MAX_BATCHES:-0}"
-PARALLEL_WORKERS="${PARALLEL_WORKERS:-4}"
+MAX_BATCHES="${MAX_BATCHES:-1}"
 PIPELINE_MODE="${PIPELINE_MODE:-reuse_predictions}"
 PREDICTIONS="${PREDICTIONS_CSV:-$PROJECT_ROOT/shared/pipeline-cache/$SYSTEM/${VERSION_ID,,}/predictions.csv}"
 TRAINING_DATASET="${TRAINING_DATASET:-}"
@@ -96,7 +89,6 @@ cd "$PROJECT_ROOT"
 
 echo "Job: $SLURM_JOB_ID on $(hostname)"
 echo "Severity: $SEVERITY_CATEGORIES; batch size: $BATCH_SIZE; start: $START_BATCH; count: $MAX_BATCHES"
-echo "Candidate validation workers: $PARALLEL_WORKERS"
 echo "Pipeline mode: $PIPELINE_MODE"
 echo "System: $SYSTEM"
 echo "Repository: $REPOSITORY_URL"
@@ -144,7 +136,6 @@ scripts/run_generic_pipeline.sh \
   --batch-size "$BATCH_SIZE" \
   --start-batch "$START_BATCH" \
   --max-batches "$MAX_BATCHES" \
-  --parallel-workers "$PARALLEL_WORKERS" \
   "${pipeline_policy_arguments[@]}" \
   "${pipeline_input_arguments[@]}" \
   "${pipeline_resume_arguments[@]}"
