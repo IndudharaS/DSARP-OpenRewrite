@@ -89,6 +89,82 @@ def metadata_path(run_id: str) -> Path:
     return RUNS / run_id / "metadata.json"
 
 
+def file_timestamp(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+
+
+def discover_hpc_runs() -> None:
+    """Rebuild the dashboard index from durable HPC run directories.
+
+    Dashboard metadata is intentionally small and may disappear when the web
+    service state is cleaned. Pipeline artifacts under the project run root are
+    the durable source of truth, so completed historical runs must remain
+    browsable without submitting or resuming a job.
+    """
+    if EXECUTION_MODE not in {"hpc", "both"} or not HPC_RUNS_ROOT.is_dir():
+        return
+    indexed_roots: set[Path] = set()
+    for metadata in RUNS.glob("*/metadata.json"):
+        try:
+            indexed_roots.add(Path(read_json_file(metadata)["runRoot"]).resolve())
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
+            continue
+    for system_dir in HPC_RUNS_ROOT.iterdir():
+        if not system_dir.is_dir() or not NAME.fullmatch(system_dir.name):
+            continue
+        for run_root in system_dir.iterdir():
+            if not run_root.is_dir() or not NAME.fullmatch(run_root.name):
+                continue
+            resolved = run_root.resolve()
+            if resolved in indexed_roots:
+                continue
+            results = run_root / "results"
+            provenance_path = results / "run-provenance.json"
+            report_path = results / "experiment-report.json"
+            manifest_path = results / "generated-openrewrite" / "manifest.json"
+            provenance = {}
+            manifest = {}
+            try:
+                if provenance_path.is_file():
+                    provenance = read_json_file(provenance_path)
+                if manifest_path.is_file():
+                    manifest = read_json_file(manifest_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+            version = str(provenance.get("version_id", ""))
+            repository = str(provenance.get("repository_url", ""))
+            if not COMMIT.fullmatch(version) or not repository:
+                # An unidentifiable directory cannot be rendered or safely
+                # associated with cached predictions.
+                continue
+            marker = run_root / ".pipeline-stage"
+            stage = detect_stage(Path(""), marker)
+            completed = report_path.is_file() and stage == "summary"
+            created_at = str(provenance.get("created_at") or file_timestamp(run_root))
+            finished_at = file_timestamp(report_path) if completed else None
+            job_id = run_root.name if run_root.name.isdigit() else ""
+            run_id = f"historical-{system_dir.name}-{run_root.name}"
+            log = STATE / f"slurm-{job_id}.log" if job_id else run_root / "logs" / "pipeline.log"
+            categories = manifest.get("selected_severity_categories") or ["high", "medium", "low"]
+            meta = {
+                "id": run_id, "system": system_dir.name,
+                "repositoryUrl": repository, "versionId": version,
+                "mode": "historical", "executionTarget": "hpc",
+                "freshMining": False, "allowRiskyCandidates": False,
+                "severityCategories": categories, "batchSize": 10,
+                "startBatch": 1, "maxBatches": 0,
+                "status": "completed" if completed else "interrupted",
+                "stage": stage, "createdAt": created_at,
+                "stageStartedAt": created_at, "finishedAt": finished_at,
+                "exitCode": 0 if completed else None, "command": [],
+                "runRoot": str(resolved), "logFile": str(log),
+                "slurmJobId": job_id or None,
+                "logicalRunId": run_root.name, "discovered": True,
+            }
+            atomic_json(metadata_path(run_id), meta)
+            indexed_roots.add(resolved)
+
+
 def command_available(name: str) -> bool:
     return shutil.which(name) is not None
 
@@ -639,6 +715,7 @@ class Handler(BaseHTTPRequestHandler):
                                            "hpcAvailable": hpc_available(),
                                            "hpcProjectSpace": str(HPC_PROJECT_SPACE)})
             if parsed.path == "/api/runs":
+                discover_hpc_runs()
                 values = []
                 for metadata in RUNS.glob("*/metadata.json"):
                     try:

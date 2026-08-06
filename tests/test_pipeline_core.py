@@ -150,6 +150,32 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(read_json_file(path)["id"], "newest")
             self.assertEqual(json.loads(path.read_text())["status"], "running")
 
+    def test_historical_hpc_runs_are_rediscovered_without_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_root = root / "hpc-runs" / "logging-log4j2" / "12345"
+            results = run_root / "results"
+            results.mkdir(parents=True)
+            (run_root / ".pipeline-stage").write_text("Stage: summary\n")
+            (results / "run-provenance.json").write_text(json.dumps({
+                "created_at": "2026-08-05T20:00:00+00:00",
+                "project": "logging-log4j2",
+                "repository_url": "https://github.com/apache/logging-log4j2.git",
+                "version_id": "4f474b32751f4ccad67424ca585612584440cd63",
+            }))
+            (results / "experiment-report.json").write_text("{}")
+            state_runs = root / "state" / "runs"
+            with (mock.patch.object(dashboard, "RUNS", state_runs),
+                  mock.patch.object(dashboard, "STATE", root / "state"),
+                  mock.patch.object(dashboard, "HPC_RUNS_ROOT", root / "hpc-runs"),
+                  mock.patch.object(dashboard, "EXECUTION_MODE", "hpc")):
+                dashboard.discover_hpc_runs()
+                metadata = read_json_file(
+                    state_runs / "historical-logging-log4j2-12345" / "metadata.json")
+            self.assertEqual(metadata["status"], "completed")
+            self.assertEqual(metadata["logicalRunId"], "12345")
+            self.assertTrue(metadata["discovered"])
+
     def test_hpc_submission_exports_inputs_without_running_pipeline_locally(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
