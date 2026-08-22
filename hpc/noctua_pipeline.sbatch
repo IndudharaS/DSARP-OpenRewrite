@@ -108,6 +108,10 @@ if [[ -n "${START_STAGE:-}" ]]; then
     >"$RUN_ROOT/resume-$SLURM_JOB_ID.txt"
   echo "Resuming run $RESUME_RUN_ID from stage $START_STAGE"
 fi
+if [[ -n "${STOP_STAGE:-}" ]]; then
+  pipeline_resume_arguments+=(--through "$STOP_STAGE")
+  echo "Pipeline will run through stage $STOP_STAGE"
+fi
 
 pipeline_input_arguments=()
 if [[ "$PIPELINE_MODE" == "fresh" ]]; then

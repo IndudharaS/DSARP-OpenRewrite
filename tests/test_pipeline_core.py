@@ -14,7 +14,8 @@ from unittest import mock
 from evaluation.summarize_arcan import comparison, cycles
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
-from webui.server import detect_stage, normalize_slurm_state, read_json_file, validate_batch_options
+from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
+                          validate_batch_options, validate_stop_stage)
 import webui.server as dashboard
 
 
@@ -143,6 +144,14 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_batch_options({"severityCategories": ["critical"]})
 
+    def test_pipeline_final_task_is_validated(self) -> None:
+        self.assertEqual(validate_stop_stage({}), "summary")
+        self.assertEqual(validate_stop_stage({"stopStage": "training"}), "training")
+        with self.assertRaises(ValueError):
+            validate_stop_stage({"stopStage": "unknown"})
+        with self.assertRaises(ValueError):
+            validate_stop_stage({"stopStage": "baseline"}, "rewrite")
+
     def test_concatenated_metadata_recovers_latest_object(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "metadata.json"
@@ -205,6 +214,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["status"], "queued")
             self.assertEqual(result["executionTarget"], "hpc")
             self.assertEqual(submit.call_args.kwargs["env"]["PIPELINE_MODE"], "reuse_predictions")
+            self.assertEqual(submit.call_args.kwargs["env"]["STOP_STAGE"], "summary")
 
 
 if __name__ == "__main__":

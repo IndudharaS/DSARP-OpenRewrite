@@ -448,11 +448,20 @@ def validate_batch_options(payload: dict) -> tuple[list[str], int, int, int]:
     return categories, batch_size, start_batch, max_batches
 
 
+def validate_stop_stage(payload: dict, resume_stage: str = "") -> str:
+    stop_stage = str(payload.get("stopStage", "summary")).strip() or "summary"
+    if stop_stage not in STAGES:
+        raise ValueError("Select a valid final pipeline task")
+    if resume_stage and STAGES.index(resume_stage) > STAGES.index(stop_stage):
+        raise ValueError("The final task must be at or after the resume stage")
+    return stop_stage
+
+
 def submission_key(payload: dict) -> str:
     fields = {key: payload.get(key) for key in (
         "system", "repositoryUrl", "versionId", "executionTarget", "mode",
         "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
-        "startBatch", "maxBatches", "resumeRunId", "resumeStage",
+        "startBatch", "maxBatches", "resumeRunId", "resumeStage", "stopStage",
     )}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -490,6 +499,7 @@ def start_hpc_run(payload: dict) -> dict:
         raise ValueError("Resume run ID and resume stage must be provided together")
     if resume_id and (not NAME.fullmatch(resume_id) or resume_stage not in RESUME_STAGES):
         raise ValueError("Invalid HPC run ID or resume stage")
+    stop_stage = validate_stop_stage(payload, resume_stage)
 
     pending_id = "hpc-pending-" + uuid.uuid4().hex[:10]
     folder = RUNS / pending_id
@@ -532,6 +542,7 @@ def start_hpc_run(payload: dict) -> dict:
         "PREDICTIONS_CSV": predictions, "TRAINING_DATASET": training,
         "SEVERITY_CATEGORIES": ",".join(categories), "BATCH_SIZE": str(batch_size),
         "START_BATCH": str(start_batch), "MAX_BATCHES": str(max_batches),
+        "STOP_STAGE": stop_stage,
         "ALLOW_RISKY_CANDIDATES": "1" if allow_risky else "0",
         "PROFILE": "log4j2" if system == "logging-log4j2" else "generic",
     })
@@ -556,6 +567,7 @@ def start_hpc_run(payload: dict) -> dict:
         "mode": mode, "executionTarget": "hpc", "freshMining": fresh_mining,
         "allowRiskyCandidates": allow_risky, "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
+        "stopStage": stop_stage,
         "status": "queued", "stage": "queued", "createdAt": now(), "stageStartedAt": now(),
         "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
         "logFile": str(log), "slurmJobId": job_id, "logicalRunId": resume_id or job_id,
@@ -570,6 +582,7 @@ def start_run(payload: dict) -> dict:
     if payload.get("executionTarget") == "hpc":
         return start_hpc_run(payload)
     system, repository, version = validate_identity(payload)
+    stop_stage = validate_stop_stage(payload)
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     folder = RUNS / run_id
@@ -610,7 +623,7 @@ def start_run(payload: dict) -> dict:
         command.append("--allow-risky-candidates")
     command += ["--severity-categories", ",".join(severity_categories),
                 "--batch-size", str(batch_size), "--start-batch", str(start_batch),
-                "--max-batches", str(max_batches)]
+                "--max-batches", str(max_batches), "--through", stop_stage]
 
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "pipeline.log"
@@ -619,6 +632,7 @@ def start_run(payload: dict) -> dict:
             "allowRiskyCandidates": allow_risky_candidates,
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
+            "stopStage": stop_stage,
             "status": "running", "stage": "starting", "createdAt": now(), "stageStartedAt": now(),
             "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
             "logFile": str(log)}
