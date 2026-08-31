@@ -41,6 +41,7 @@ SEVERITY_CATEGORIES="high,medium,low"
 BATCH_SIZE=10
 START_BATCH=1
 MAX_BATCHES=0
+MAX_COMMITS_PER_REPO=500
 START_STAGE="preflight"
 STOP_STAGE="summary"
 
@@ -78,6 +79,9 @@ Options:
   --batch-size NUMBER    Candidates validated per batch (default: 10).
   --start-batch NUMBER   One-based first batch to execute (default: 1).
   --max-batches NUMBER   Stop validation after this many batches; 0 means all.
+  --max-commits-per-repo NUMBER
+                         Maximum historical commits mined from each training
+                         repository (default: 500).
   --help                 Show this help.
 
 Stages:
@@ -125,6 +129,7 @@ while (($#)); do
     --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
     --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
+    --max-commits-per-repo) MAX_COMMITS_PER_REPO="${2:?missing commit limit}"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -140,6 +145,7 @@ fi
 [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || { echo "--batch-size must be a positive integer" >&2; exit 2; }
 [[ "$START_BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "--start-batch must be a positive integer" >&2; exit 2; }
 [[ "$MAX_BATCHES" =~ ^[0-9]+$ ]] || { echo "--max-batches must be zero or a positive integer" >&2; exit 2; }
+[[ "$MAX_COMMITS_PER_REPO" =~ ^[1-9][0-9]*$ ]] || { echo "--max-commits-per-repo must be a positive integer" >&2; exit 2; }
 if [[ "$PROFILE" == "generic" ]]; then
   OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_maven.sh"
   VALIDATOR_COMPATIBILITY_PROFILE="none"
@@ -593,21 +599,22 @@ if should_run mining; then
           --work-dir "$MINING_CACHE_DIR/work" \
           --output-dir "$MINING_CACHE_DIR/output" \
           --refactoring-miner "$REFMINER" \
-          --max-commits-per-repo 500 \
+          --max-commits-per-repo "$MAX_COMMITS_PER_REPO" \
           --top-k-labels 5 | tee "$LOG_DIR/mining.log"
         cache_dataset="$MINING_CACHE_DIR/output/arcan_style_training_dataset.jsonl"
-        "$PYTHON" - "$MINING_CACHE_DIR/cache-manifest.json" "$cache_dataset" <<'PY'
+        "$PYTHON" - "$MINING_CACHE_DIR/cache-manifest.json" "$cache_dataset" "$MAX_COMMITS_PER_REPO" <<'PY'
 import json, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-manifest, dataset = map(Path, sys.argv[1:])
+manifest, dataset = map(Path, sys.argv[1:3])
+max_commits_per_repository = int(sys.argv[3])
 records = sum(1 for line in dataset.open(encoding="utf-8") if line.strip())
 manifest.write_text(json.dumps({
     "createdAt": datetime.now(timezone.utc).isoformat(),
     "repositories": ["tika", "maven", "camel", "ant", "lucene"],
-    "maxCommitsPerRepository": 500,
-    "maximumCommitCount": 2500,
+    "maxCommitsPerRepository": max_commits_per_repository,
+    "maximumCommitCount": max_commits_per_repository * 5,
     "topKLabels": 5,
     "trainingRecords": records,
     "dataset": "output/arcan_style_training_dataset.jsonl",

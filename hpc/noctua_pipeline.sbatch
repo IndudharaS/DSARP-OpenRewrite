@@ -54,6 +54,7 @@ BATCH_SIZE="${BATCH_SIZE:-10}"
 START_BATCH="${START_BATCH:-1}"
 MAX_BATCHES="${MAX_BATCHES:-1}"
 PIPELINE_MODE="${PIPELINE_MODE:-reuse_predictions}"
+MAX_COMMITS_PER_REPO="${MAX_COMMITS_PER_REPO:-500}"
 PREDICTIONS="${PREDICTIONS_CSV:-$PROJECT_ROOT/shared/pipeline-cache/$SYSTEM/${VERSION_ID,,}/predictions.csv}"
 TRAINING_DATASET="${TRAINING_DATASET:-}"
 RUN_ID="${RESUME_RUN_ID:-$SLURM_JOB_ID}"
@@ -90,6 +91,7 @@ cd "$PROJECT_ROOT"
 echo "Job: $SLURM_JOB_ID on $(hostname)"
 echo "Severity: $SEVERITY_CATEGORIES; batch size: $BATCH_SIZE; start: $START_BATCH; count: $MAX_BATCHES"
 echo "Pipeline mode: $PIPELINE_MODE"
+echo "Maximum commits per training repository: $MAX_COMMITS_PER_REPO"
 echo "System: $SYSTEM"
 echo "Repository: $REPOSITORY_URL"
 echo "Version: $VERSION_ID"
@@ -140,6 +142,7 @@ scripts/run_generic_pipeline.sh \
   --batch-size "$BATCH_SIZE" \
   --start-batch "$START_BATCH" \
   --max-batches "$MAX_BATCHES" \
+  --max-commits-per-repo "$MAX_COMMITS_PER_REPO" \
   "${pipeline_policy_arguments[@]}" \
   "${pipeline_input_arguments[@]}" \
   "${pipeline_resume_arguments[@]}"

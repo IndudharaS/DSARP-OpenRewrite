@@ -22,6 +22,7 @@ SEVERITY_CATEGORIES="high,medium,low"
 BATCH_SIZE=10
 START_BATCH=1
 MAX_BATCHES=0
+MAX_COMMITS_PER_REPO=500
 
 usage() {
   cat <<'EOF'
@@ -50,6 +51,8 @@ Inputs:
   --batch-size NUMBER       Candidates per validation batch (default: 10).
   --start-batch NUMBER      One-based first batch to execute (default: 1).
   --max-batches NUMBER      Maximum batches to run; 0 means all.
+  --max-commits-per-repo NUMBER
+                            Historical commits mined per training repository.
 
 Lifecycle:
   --clean                   Back up an existing run before starting.
@@ -79,6 +82,7 @@ while (($#)); do
     --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
     --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
+    --max-commits-per-repo) MAX_COMMITS_PER_REPO="${2:?missing commit limit}"; shift 2 ;;
     --run-root) RUN_ROOT="${2:?missing path}"; shift 2 ;;
     --clean|--from|--through)
       FORWARD+=("$1")
@@ -133,6 +137,7 @@ if ((ALLOW_RISKY_CANDIDATES)); then
   arguments+=(--allow-risky-candidates)
 fi
 arguments+=(--severity-categories "$SEVERITY_CATEGORIES" --batch-size "$BATCH_SIZE" --start-batch "$START_BATCH" --max-batches "$MAX_BATCHES")
+arguments+=(--max-commits-per-repo "$MAX_COMMITS_PER_REPO")
 
 if ((${#FORWARD[@]})); then
   exec "$SCRIPT_DIR/run_log4j2_pipeline.sh" "${arguments[@]}" "${FORWARD[@]}"

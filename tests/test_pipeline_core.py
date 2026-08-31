@@ -15,7 +15,8 @@ from evaluation.summarize_arcan import comparison, cycles
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
-                          validate_batch_options, validate_stop_stage)
+                          validate_batch_options, validate_max_commits,
+                          validate_stop_stage)
 import webui.server as dashboard
 
 
@@ -152,6 +153,13 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_stop_stage({"stopStage": "baseline"}, "rewrite")
 
+    def test_mining_commit_limit_is_validated(self) -> None:
+        self.assertEqual(validate_max_commits({}), 500)
+        self.assertEqual(validate_max_commits({"maxCommitsPerRepository": "2000"}), 2000)
+        for value in (0, 10001, "not-a-number"):
+            with self.assertRaises(ValueError):
+                validate_max_commits({"maxCommitsPerRepository": value})
+
     def test_concatenated_metadata_recovers_latest_object(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "metadata.json"
@@ -215,6 +223,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["executionTarget"], "hpc")
             self.assertEqual(submit.call_args.kwargs["env"]["PIPELINE_MODE"], "reuse_predictions")
             self.assertEqual(submit.call_args.kwargs["env"]["STOP_STAGE"], "summary")
+            self.assertEqual(submit.call_args.kwargs["env"]["MAX_COMMITS_PER_REPO"], "500")
 
 
 if __name__ == "__main__":

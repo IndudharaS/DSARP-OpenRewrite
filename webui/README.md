@@ -17,13 +17,19 @@ Open <http://127.0.0.1:8765> and keep the terminal running. Stop the server with
 
 ## Features
 
-- creates fast verified, full, reused-training-data, or uploaded-predictions experiments;
+- offers outcome-based workflows for mining-only output, prediction generation
+  from shared mining data, complete shared-data runs, complete fresh runs, fast
+  verified runs, and uploaded training/prediction inputs;
+- lets fresh workflows set commits per training repository and shows the
+  calculated maximum across all five repositories;
+- reports the shared cache's configured maximum, actual mined commit rows and
+  generated training-record count before submission;
 - fast verified mode reuses `shared/pipeline-cache/<system>/<commit>/predictions.csv`
   for the same system and commit,
   skipping RefactoringMiner, model training and prediction while retaining
   OpenRewrite validation, build verification and matched Arcan analysis;
 - reuses `shared/refactoring-miner/default` across web and CLI experiments;
-- offers an explicit fresh-mining checkbox that rebuilds the shared cache;
+- previews every included, reused, final and excluded stage before submission;
 - provides presets for Tika, Karaf, Struts, Logging-Log4j2 and Cassandra and
   fills their repository URLs and assigned revisions automatically;
 - uploads and validates the three baseline Arcan CSV files;

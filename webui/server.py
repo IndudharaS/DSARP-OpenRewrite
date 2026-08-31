@@ -14,6 +14,7 @@ import re
 import signal
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ RUNS = STATE / "runs"
 ASSETS = ROOT / "webui" / "static"
 PIPELINE = ROOT / "scripts" / "run_generic_pipeline.sh"
 PIPELINE_CACHE = ROOT / "shared" / "pipeline-cache"
+MINING_MANIFEST = ROOT / "shared" / "refactoring-miner" / "default" / "cache-manifest.json"
 HPC_SCRIPT = ROOT / "hpc" / "noctua_pipeline.sbatch"
 EXECUTION_MODE = "local"
 HPC_PROJECT_SPACE = Path(os.environ.get("DSARP_HPC_PROJECT_SPACE", f"/scratch/hpc-prf-dssecs/{os.environ.get('USER', '')}"))
@@ -448,6 +450,46 @@ def validate_batch_options(payload: dict) -> tuple[list[str], int, int, int]:
     return categories, batch_size, start_batch, max_batches
 
 
+def validate_max_commits(payload: dict) -> int:
+    try:
+        value = int(payload.get("maxCommitsPerRepository", 500))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Commits per repository must be an integer") from error
+    if not 1 <= value <= 10000:
+        raise ValueError("Commits per repository must be between 1 and 10,000")
+    return value
+
+
+def shared_mining_summary() -> dict:
+    dataset = MINING_MANIFEST.parent / "output" / "arcan_style_training_dataset.jsonl"
+    if not MINING_MANIFEST.is_file() or not dataset.is_file() or dataset.stat().st_size == 0:
+        return {"available": False}
+    try:
+        manifest = read_json_file(MINING_MANIFEST)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {"available": False}
+    repositories = manifest.get("repositories") or []
+    raw_commits = MINING_MANIFEST.parent / "output" / "raw_commits.csv"
+    mined_commit_records = None
+    if raw_commits.is_file():
+        try:
+            with raw_commits.open(newline="", encoding="utf-8-sig") as handle:
+                csv.field_size_limit(sys.maxsize)
+                mined_commit_records = sum(1 for _ in csv.DictReader(handle))
+        except (OSError, csv.Error, OverflowError):
+            pass
+    return {
+        "available": True,
+        "repositories": repositories,
+        "repositoryCount": len(repositories),
+        "maxCommitsPerRepository": manifest.get("maxCommitsPerRepository"),
+        "maximumCommitCount": manifest.get("maximumCommitCount"),
+        "minedCommitRecords": mined_commit_records,
+        "trainingRecords": manifest.get("trainingRecords"),
+        "createdAt": manifest.get("createdAt"),
+    }
+
+
 def validate_stop_stage(payload: dict, resume_stage: str = "") -> str:
     stop_stage = str(payload.get("stopStage", "summary")).strip() or "summary"
     if stop_stage not in STAGES:
@@ -462,6 +504,7 @@ def submission_key(payload: dict) -> str:
         "system", "repositoryUrl", "versionId", "executionTarget", "mode",
         "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
         "startBatch", "maxBatches", "resumeRunId", "resumeStage", "stopStage",
+        "workflowGoal", "maxCommitsPerRepository",
     )}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -490,6 +533,10 @@ def start_hpc_run(payload: dict) -> dict:
     if duplicate:
         return duplicate
     categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
+    max_commits = validate_max_commits(payload)
+    workflow_goal = str(payload.get("workflowGoal", "custom"))
+    if workflow_goal in {"predictions_shared", "complete_shared"} and not shared_mining_summary()["available"]:
+        raise ValueError("The selected workflow requires shared RefactoringMiner output; run fresh mining first")
     mode = str(payload.get("mode", "latest_predictions"))
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky = bool(payload.get("allowRiskyCandidates", False))
@@ -542,6 +589,7 @@ def start_hpc_run(payload: dict) -> dict:
         "PREDICTIONS_CSV": predictions, "TRAINING_DATASET": training,
         "SEVERITY_CATEGORIES": ",".join(categories), "BATCH_SIZE": str(batch_size),
         "START_BATCH": str(start_batch), "MAX_BATCHES": str(max_batches),
+        "MAX_COMMITS_PER_REPO": str(max_commits),
         "STOP_STAGE": stop_stage,
         "ALLOW_RISKY_CANDIDATES": "1" if allow_risky else "0",
         "PROFILE": "log4j2" if system == "logging-log4j2" else "generic",
@@ -564,10 +612,10 @@ def start_hpc_run(payload: dict) -> dict:
     run_root = HPC_RUNS_ROOT / system / (resume_id or job_id)
     meta = {
         "id": run_id, "system": system, "repositoryUrl": repository, "versionId": version,
-        "mode": mode, "executionTarget": "hpc", "freshMining": fresh_mining,
+        "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "hpc", "freshMining": fresh_mining,
         "allowRiskyCandidates": allow_risky, "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
-        "stopStage": stop_stage,
+        "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
         "status": "queued", "stage": "queued", "createdAt": now(), "stageStartedAt": now(),
         "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
         "logFile": str(log), "slurmJobId": job_id, "logicalRunId": resume_id or job_id,
@@ -583,6 +631,10 @@ def start_run(payload: dict) -> dict:
         return start_hpc_run(payload)
     system, repository, version = validate_identity(payload)
     stop_stage = validate_stop_stage(payload)
+    max_commits = validate_max_commits(payload)
+    workflow_goal = str(payload.get("workflowGoal", "custom"))
+    if workflow_goal in {"predictions_shared", "complete_shared"} and not shared_mining_summary()["available"]:
+        raise ValueError("The selected workflow requires shared RefactoringMiner output; run fresh mining first")
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     folder = RUNS / run_id
@@ -623,16 +675,17 @@ def start_run(payload: dict) -> dict:
         command.append("--allow-risky-candidates")
     command += ["--severity-categories", ",".join(severity_categories),
                 "--batch-size", str(batch_size), "--start-batch", str(start_batch),
-                "--max-batches", str(max_batches), "--through", stop_stage]
+                "--max-batches", str(max_batches), "--max-commits-per-repo", str(max_commits),
+                "--through", stop_stage]
 
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "pipeline.log"
     meta = {"id": run_id, "system": system, "repositoryUrl": repository, "versionId": version,
-            "mode": mode, "executionTarget": "local", "freshMining": fresh_mining,
+            "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "local", "freshMining": fresh_mining,
             "allowRiskyCandidates": allow_risky_candidates,
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
-            "stopStage": stop_stage,
+            "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
             "status": "running", "stage": "starting", "createdAt": now(), "stageStartedAt": now(),
             "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
             "logFile": str(log)}
@@ -727,7 +780,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response({"ok": True, "apiVersion": 3,
                                            "executionMode": EXECUTION_MODE,
                                            "hpcAvailable": hpc_available(),
-                                           "hpcProjectSpace": str(HPC_PROJECT_SPACE)})
+                                           "hpcProjectSpace": str(HPC_PROJECT_SPACE),
+                                           "sharedMining": shared_mining_summary()})
             if parsed.path == "/api/runs":
                 discover_hpc_runs()
                 values = []

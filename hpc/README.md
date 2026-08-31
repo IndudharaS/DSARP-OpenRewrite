@@ -91,13 +91,18 @@ prediction CSV and skips mining, training, and prediction. To rebuild the
 experiment from fresh RefactoringMiner output, submit with:
 
 ```bash
-sbatch --export=ALL,PIPELINE_MODE=fresh,SEVERITY_CATEGORIES=high,BATCH_SIZE=1,START_BATCH=1,MAX_BATCHES=1 \
+sbatch --export=ALL,PIPELINE_MODE=fresh,MAX_COMMITS_PER_REPO=2000,SEVERITY_CATEGORIES=high,BATCH_SIZE=1,START_BATCH=1,MAX_BATCHES=1 \
   hpc/noctua_pipeline.sbatch
 ```
 
 Fresh mode does not require the shared prediction CSV. It passes `--remine`,
 then prepares training data, trains the model, generates new predictions, and
 continues through OpenRewrite and Arcan.
+
+`MAX_COMMITS_PER_REPO` controls the mining limit without editing the pipeline
+script. Five repositories are configured, so `2000` represents a maximum of
+10,000 selected commits. The generated cache manifest records both values and
+the number of resulting training records.
 
 If a fresh run stops after mining, first correct the reported dependency or
 environment issue with `noctua_setup.sbatch`, then reuse the run directory with
