@@ -9,7 +9,7 @@ OpenRewrite is separated into reviewable generation and execution files:
 ml/validation_agent.py
 openrewrite/generate_recipes.py
 openrewrite/README.md
-openrewrite/templates/FileSize.java
+openrewrite/templates/FileSizeCompatibilityFacade.java
 scripts/generate_openrewrite_recipes.sh
 scripts/run_openrewrite_log4j2.sh
 ```
