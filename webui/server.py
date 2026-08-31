@@ -499,12 +499,23 @@ def validate_stop_stage(payload: dict, resume_stage: str = "") -> str:
     return stop_stage
 
 
+def validate_run_name(payload: dict) -> str:
+    run_name = " ".join(str(payload.get("runName", "")).split())
+    if not run_name:
+        raise ValueError("Enter an experiment name")
+    if len(run_name) > 80:
+        raise ValueError("Experiment name must be 80 characters or fewer")
+    if any(ord(character) < 32 or ord(character) == 127 for character in run_name):
+        raise ValueError("Experiment name contains unsupported control characters")
+    return run_name
+
+
 def submission_key(payload: dict) -> str:
     fields = {key: payload.get(key) for key in (
         "system", "repositoryUrl", "versionId", "executionTarget", "mode",
         "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
         "startBatch", "maxBatches", "resumeRunId", "resumeStage", "stopStage",
-        "workflowGoal", "maxCommitsPerRepository",
+        "workflowGoal", "maxCommitsPerRepository", "runName",
     )}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -528,6 +539,7 @@ def start_hpc_run(payload: dict) -> dict:
     if not hpc_available():
         raise ValueError("Slurm commands or hpc/noctua_pipeline.sbatch are unavailable")
     system, repository, version = validate_identity(payload)
+    run_name = validate_run_name(payload)
     key = submission_key(payload)
     duplicate = recent_active_submission(key)
     if duplicate:
@@ -611,7 +623,7 @@ def start_hpc_run(payload: dict) -> dict:
     log = STATE / f"slurm-{job_id}.log"
     run_root = HPC_RUNS_ROOT / system / (resume_id or job_id)
     meta = {
-        "id": run_id, "system": system, "repositoryUrl": repository, "versionId": version,
+        "id": run_id, "runName": run_name, "system": system, "repositoryUrl": repository, "versionId": version,
         "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "hpc", "freshMining": fresh_mining,
         "allowRiskyCandidates": allow_risky, "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
@@ -630,6 +642,7 @@ def start_run(payload: dict) -> dict:
     if payload.get("executionTarget") == "hpc":
         return start_hpc_run(payload)
     system, repository, version = validate_identity(payload)
+    run_name = validate_run_name(payload)
     stop_stage = validate_stop_stage(payload)
     max_commits = validate_max_commits(payload)
     workflow_goal = str(payload.get("workflowGoal", "custom"))
@@ -680,7 +693,7 @@ def start_run(payload: dict) -> dict:
 
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "pipeline.log"
-    meta = {"id": run_id, "system": system, "repositoryUrl": repository, "versionId": version,
+    meta = {"id": run_id, "runName": run_name, "system": system, "repositoryUrl": repository, "versionId": version,
             "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "local", "freshMining": fresh_mining,
             "allowRiskyCandidates": allow_risky_candidates,
             "severityCategories": severity_categories, "batchSize": batch_size,

@@ -160,6 +160,13 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_max_commits({"maxCommitsPerRepository": value})
 
+    def test_experiment_name_is_normalized_and_validated(self) -> None:
+        self.assertEqual(dashboard.validate_run_name({"runName": "  Log4j2   evaluation  "}),
+                         "Log4j2 evaluation")
+        for value in ("", "   ", "x" * 81):
+            with self.assertRaises(ValueError):
+                dashboard.validate_run_name({"runName": value})
+
     def test_concatenated_metadata_recovers_latest_object(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "metadata.json"
@@ -213,6 +220,7 @@ class EvidenceTests(unittest.TestCase):
                   mock.patch.object(dashboard, "latest_compatible_predictions", return_value=predictions),
                   mock.patch.object(dashboard.subprocess, "run", return_value=completed) as submit):
                 result = dashboard.start_hpc_run({
+                    "runName": "Log4j2 prediction check",
                     "system": "logging-log4j2", "repositoryUrl": "https://example.test/repo.git",
                     "versionId": "4f474b3", "mode": "latest_predictions",
                     "baselineFiles": csvs, "severityCategories": ["high"],
@@ -221,6 +229,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["slurmJobId"], "12345")
             self.assertEqual(result["status"], "queued")
             self.assertEqual(result["executionTarget"], "hpc")
+            self.assertEqual(result["runName"], "Log4j2 prediction check")
             self.assertEqual(submit.call_args.kwargs["env"]["PIPELINE_MODE"], "reuse_predictions")
             self.assertEqual(submit.call_args.kwargs["env"]["STOP_STAGE"], "summary")
             self.assertEqual(submit.call_args.kwargs["env"]["MAX_COMMITS_PER_REPO"], "500")
