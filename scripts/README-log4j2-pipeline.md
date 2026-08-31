@@ -6,12 +6,21 @@ experiment at commit `4f474b32751f4ccad67424ca585612584440cd63`.
 OpenRewrite is separated into reviewable generation and execution files:
 
 ```text
+ml/validation_agent.py
 openrewrite/generate_recipes.py
 openrewrite/README.md
-openrewrite/templates/FileSizeCompatibilityFacade.java
+openrewrite/templates/FileSize.java
 scripts/generate_openrewrite_recipes.sh
 scripts/run_openrewrite_log4j2.sh
 ```
+
+Before generation, `ml/validation_agent.py` evaluates every ranked
+refactoring-type suggestion the model produced for each smell — ignoring its
+confidence score — against a documented smell-to-refactoring compatibility
+matrix, and selects the structurally best-fit candidate (or records that none
+of the ranked suggestions are known to resolve the reported smell). Its output
+CSV, not the raw model predictions, is what `generate_recipes.py` consumes.
+See [../docs/VALIDATION.md](../docs/VALIDATION.md) for the full gate list.
 
 It validates prerequisites, imports the supplied baseline Arcan CSVs, optionally
 reruns mining and model inference, clones the assigned Log4j2 version, applies an
@@ -93,6 +102,7 @@ inputs
 mining
 training
 prediction
+candidate_validation
 clone
 baseline
 rewrite
@@ -212,6 +222,7 @@ runs/log4j2/
 │   ├── experiment-report.json
 │   ├── model-evaluation.json
 │   ├── training-data-quality.json
+│   ├── validation-agent-report.json
 │   ├── openrewrite-validation/
 │   │   ├── validation-report.csv
 │   │   ├── validation-report.json

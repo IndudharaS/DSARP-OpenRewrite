@@ -32,8 +32,9 @@ HPC_SCRIPT = ROOT / "hpc" / "noctua_pipeline.sbatch"
 EXECUTION_MODE = "local"
 HPC_PROJECT_SPACE = Path(os.environ.get("DSARP_HPC_PROJECT_SPACE", f"/scratch/hpc-prf-dssecs/{os.environ.get('USER', '')}"))
 HPC_RUNS_ROOT = HPC_PROJECT_SPACE / "runs"
-STAGES = ["preflight", "inputs", "mining", "training", "prediction", "clone", "baseline",
-          "rewrite", "focused_test", "format", "final_verify", "smells", "summary"]
+STAGES = ["preflight", "inputs", "mining", "training", "prediction", "candidate_validation",
+          "clone", "baseline", "rewrite", "focused_test", "format", "final_verify", "smells",
+          "summary"]
 PROCESSES: dict[str, subprocess.Popen[str]] = {}
 LOCK = threading.Lock()
 SUBMIT_LOCK = threading.Lock()

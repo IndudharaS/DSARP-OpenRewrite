@@ -5,16 +5,22 @@
 A candidate is automatically applicable only when all gates pass:
 
 1. the affected packages and source type exist at the exact requested commit;
-2. the recipe has concrete, repository-derived parameters;
-3. test/production and module boundaries are safe;
-4. a public API move has an explicitly registered compatibility strategy;
-5. OpenRewrite produces relevant source/build-file changes;
-6. formatting and `git diff --check` pass;
-7. isolated Maven verification and configured API checks pass;
-8. the validated aggregate passes project-level verification;
-9. baseline and refactored bytecode are measured by the same pinned Arcan build
-   with the same options;
-10. the evidence report confirms the revision, source diff, artifact hashes,
+2. a rule-based validation agent (`ml/validation_agent.py`) evaluates every
+   ranked refactoring-type suggestion the model produced for the row —
+   ignoring the model's confidence score — against a documented
+   smell-to-refactoring compatibility matrix, and selects the structurally
+   best-fit candidate (or records that no candidate is known to resolve the
+   reported smell);
+3. the recipe has concrete, repository-derived parameters;
+4. test/production and module boundaries are safe;
+5. a public API move has an explicitly registered compatibility strategy;
+6. OpenRewrite produces relevant source/build-file changes;
+7. formatting and `git diff --check` pass;
+8. isolated Maven verification and configured API checks pass;
+9. the validated aggregate passes project-level verification;
+10. baseline and refactored bytecode are measured by the same pinned Arcan build
+    with the same options;
+11. the evidence report confirms the revision, source diff, artifact hashes,
     and whether a causal result may be stated.
 
 ## Assigned Logging-Log4j2 revision
@@ -71,3 +77,11 @@ qualification threshold and is marked `research_only`. Build/API validation—no
 applied Log4j2 result trustworthy. A larger independently labelled corpus and
 external validation are required before industrial recommendation-quality
 claims are justified.
+
+The validation agent (protocol gate 2) mitigates, but does not eliminate,
+majority-label collapse: because it evaluates every ranked suggestion instead
+of only the top-1 label, a lower-ranked, non-`Move Class` candidate can still
+be selected when it is the structurally better fit for the reported smell.
+It does not change the underlying model, and a smell it marks `no` (no
+compatible candidate) is not proof the smell is unsolvable — only that no
+ranked suggestion for that row matches the documented compatibility matrix.

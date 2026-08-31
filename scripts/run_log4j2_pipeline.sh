@@ -18,6 +18,7 @@ OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_log4j2.sh"
 OPENREWRITE_GENERATOR="$PROJECT_ROOT/scripts/generate_openrewrite_recipes.sh"
 ARCAN_RUNNER="$PROJECT_ROOT/scripts/run_arcan_smells.sh"
 CANDIDATE_VALIDATOR="$PROJECT_ROOT/evaluation/validate_openrewrite_candidates.py"
+VALIDATION_AGENT="$PROJECT_ROOT/ml/validation_agent.py"
 BASELINE_CSV_DIR="$PROJECT_ROOT/baseline_csv"
 BASE_REPO="$RUN_ROOT/repositories/logging-log4j2"
 REWRITE_REPO="$RUN_ROOT/repositories/logging-log4j2-openrewrite"
@@ -44,7 +45,7 @@ MAX_BATCHES=0
 START_STAGE="preflight"
 STOP_STAGE="summary"
 
-STAGES=(preflight inputs mining training prediction clone baseline rewrite focused_test format final_verify smells summary)
+STAGES=(preflight inputs mining training prediction candidate_validation clone baseline rewrite focused_test format final_verify smells summary)
 
 usage() {
   cat <<'EOF'
@@ -164,6 +165,7 @@ fi
 if ((PREDICTIONS_EXPLICIT)) && [[ "$PREDICTIONS" != /* ]]; then
   PREDICTIONS="$(cd "$(dirname "$PREDICTIONS")" && pwd)/$(basename "$PREDICTIONS")"
 fi
+VALIDATED_PREDICTIONS="$RUN_ROOT/pipeline-results/${PROJECT_NAME}_validation_agent.csv"
 
 stage_index() {
   local wanted="$1" index
@@ -452,6 +454,7 @@ if should_run preflight; then
   require_file "$PROJECT_ROOT/evaluation/validate_baseline_inputs.py"
   require_file "$PROJECT_ROOT/evaluation/capture_provenance.py"
   require_file "$CANDIDATE_VALIDATOR"
+  require_file "$VALIDATION_AGENT"
   require_file "$PROJECT_ROOT/ml/predict_refactorings.py"
   require_file "$PROJECT_ROOT/ml/prepare_training_dataset.py"
   require_file "$PROJECT_ROOT/ml/evaluate_rankings.py"
@@ -708,6 +711,17 @@ if projects and projects != {sys.argv[2]}:
 PY
 fi
 
+if should_run candidate_validation; then
+  heading "Stage: candidate validation"
+  mkdir -p "$(dirname "$VALIDATED_PREDICTIONS")"
+  "$PYTHON" "$VALIDATION_AGENT" \
+    --predictions "$PREDICTIONS" \
+    --output-csv "$VALIDATED_PREDICTIONS" \
+    --output-json "$RESULTS_DIR/validation-agent-report.json" \
+    | tee "$LOG_DIR/candidate-validation.log"
+fi
+require_file "$VALIDATED_PREDICTIONS"
+
 if should_run clone; then
   heading "Stage: clone"
   if [[ -e "$BASE_REPO" ]]; then
@@ -745,7 +759,8 @@ if should_run rewrite; then
 
   "$OPENREWRITE_GENERATOR" \
     --repository "$REWRITE_REPO" \
-    --predictions "$PREDICTIONS" \
+    --predictions "$VALIDATED_PREDICTIONS" \
+    --suggestions-column agent_selected_refactoring \
     --output-dir "$RESULTS_DIR/generated-openrewrite" \
     --severity-categories "$SEVERITY_CATEGORIES"
 

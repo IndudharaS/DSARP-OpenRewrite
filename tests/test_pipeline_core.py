@@ -13,6 +13,7 @@ from unittest import mock
 
 from evaluation.summarize_arcan import comparison, cycles
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
+from ml.validation_agent import evaluate, evaluate_row, parse_candidates
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from webui.server import detect_stage, normalize_slurm_state, read_json_file, validate_batch_options
 import webui.server as dashboard
@@ -205,6 +206,77 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["status"], "queued")
             self.assertEqual(result["executionTarget"], "hpc")
             self.assertEqual(submit.call_args.kwargs["env"]["PIPELINE_MODE"], "reuse_predictions")
+
+
+class ValidationAgentTests(unittest.TestCase):
+    def test_confidence_scores_are_parsed_and_discarded(self) -> None:
+        self.assertEqual(
+            parse_candidates("Move Class (0.870) | Extract Interface (0.650)"),
+            ["Move Class", "Extract Interface"],
+        )
+
+    def test_higher_weight_candidate_wins_regardless_of_rank_or_score(self) -> None:
+        # "Rename Package" is ranked and scored first but has no compatibility
+        # weight for a cyclic dependency; "Move Class" does (weight 2) and
+        # must be chosen even though it is listed second.
+        decision = evaluate_row(
+            1, "Cyclic Dependency",
+            "Rename Package (0.900) | Move Class (0.100)",
+        )
+        self.assertEqual(decision.chosen, "Move Class")
+        self.assertEqual(decision.smell_solvable, "yes")
+
+    def test_all_incompatible_candidates_mark_smell_unsolved(self) -> None:
+        decision = evaluate_row(1, "Unstable Dependency", "Rename Package (0.9) | Move Method (0.8)")
+        self.assertIsNone(decision.chosen)
+        self.assertEqual(decision.smell_solvable, "no")
+
+    def test_unrecognized_smell_is_flagged_unsupported(self) -> None:
+        decision = evaluate_row(1, "God Component", "Move Class (0.9)")
+        self.assertEqual(decision.smell_solvable, "unsupported_smell_type")
+        self.assertIsNone(decision.chosen)
+
+    def test_agent_output_feeds_generate_recipes_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "repo"
+            for package, name, imported in (
+                ("example.left", "Left", "example.right.Right"),
+                ("example.right", "Right", "example.left.Left"),
+            ):
+                path = repository / "module" / "src" / "main" / "java" / Path(*package.split(".")) / f"{name}.java"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"package {package};\nimport {imported};\npublic class {name} {{}}\n")
+
+            predictions = root / "predictions.csv"
+            with predictions.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=["architecture_smell", "affected_elements", "suggestions"])
+                writer.writeheader()
+                writer.writerow({
+                    "architecture_smell": "Cyclic Dependency",
+                    "affected_elements": "example.left|example.right",
+                    "suggestions": "Rename Package (0.9) | Move Class (0.1)",
+                })
+
+            agent_output = root / "validated.csv"
+            with contextlib.redirect_stdout(io.StringIO()):
+                report = evaluate(Namespace(
+                    predictions=predictions, output_csv=agent_output, output_json=root / "report.json",
+                    smell_column="architecture_smell", elements_column="affected_elements",
+                    suggestions_column="suggestions",
+                ))
+            self.assertEqual(report["smell_solvable_counts"], {"yes": 1})
+
+            output = root / "output"
+            with contextlib.redirect_stdout(io.StringIO()):
+                generate(Namespace(
+                    repository=repository, predictions=agent_output, output_dir=output,
+                    smell_column="architecture_smell", elements_column="affected_elements",
+                    suggestions_column="agent_selected_refactoring", elements_separator="|",
+                ))
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["records"][0]["status"], "ready_for_dry_run")
 
 
 if __name__ == "__main__":
