@@ -136,6 +136,17 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(normalize_slurm_state("CANCELLED by 1000"), "stopped")
         self.assertEqual(normalize_slurm_state("OUT_OF_MEMORY"), "failed")
 
+    def test_completed_pipeline_log_recovers_missing_slurm_accounting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "slurm.log"
+            log.write_text("Stage: prediction\nPipeline completed. Results: /run/results\n")
+            update = dashboard.completed_pipeline_log_update({"logFile": str(log)})
+            self.assertEqual(update["status"], "completed")
+            self.assertEqual(update["exitCode"], 0)
+            self.assertEqual(update["slurmState"], "COMPLETED_FROM_LOG")
+            log.write_text("Stage: prediction\nStill running\n")
+            self.assertIsNone(dashboard.completed_pipeline_log_update({"logFile": str(log)}))
+
     def test_hpc_batch_options_are_validated(self) -> None:
         categories, size, start, maximum = validate_batch_options({
             "severityCategories": ["high"], "batchSize": "12",

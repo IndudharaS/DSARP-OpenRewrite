@@ -217,17 +217,38 @@ def slurm_status(job_id: str) -> dict:
             "slurmElapsed": elapsed, "slurmReason": "", "exitCode": numeric_exit}
 
 
+def completed_pipeline_log_update(data: dict) -> dict | None:
+    """Recover success when a completed job is absent from Slurm accounting."""
+    log = Path(str(data.get("logFile", "")))
+    if not log.is_file():
+        return None
+    with log.open("rb") as handle:
+        size = log.stat().st_size
+        handle.seek(max(0, size - 256_000))
+        tail = handle.read().decode(errors="replace")
+    if "Pipeline completed. Results:" not in tail:
+        return None
+    return {
+        "slurmState": "COMPLETED_FROM_LOG", "status": "completed",
+        "slurmReason": "Recovered from pipeline success marker",
+        "exitCode": 0, "finishedAt": file_timestamp(log),
+    }
+
+
 def refresh_hpc_run(data: dict) -> dict:
     if data.get("status") not in {"queued", "running"}:
         return data
     update = slurm_status(str(data["slurmJobId"]))
     if update.get("status") is None:
-        data["slurmState"] = update["slurmState"]
-        return data
+        recovered = completed_pipeline_log_update(data)
+        if recovered is None:
+            data["slurmState"] = update["slurmState"]
+            return data
+        update = recovered
     old_status = data.get("status")
     data.update(update)
     if old_status != data["status"] and data["status"] in {"completed", "failed", "stopped", "interrupted"}:
-        data["finishedAt"] = now()
+        data["finishedAt"] = update.get("finishedAt") or now()
         if data["status"] == "completed":
             cache_completed_artifacts(data)
     return data
@@ -241,14 +262,14 @@ def refresh_hpc_run_in_background(run_id: str) -> None:
             return
         update = slurm_status(str(original["slurmJobId"]))
         if update.get("status") is None:
-            update = {"slurmState": update["slurmState"]}
+            update = completed_pipeline_log_update(original) or {"slurmState": update["slurmState"]}
         with LOCK:
             current = read_json_file(path)
             old_status = current.get("status")
             current.update(update)
             if (old_status != current.get("status")
                     and current.get("status") in {"completed", "failed", "stopped", "interrupted"}):
-                current["finishedAt"] = now()
+                current["finishedAt"] = current.get("finishedAt") or now()
                 if current["status"] == "completed":
                     cache_completed_artifacts(current)
             atomic_json(path, current)
