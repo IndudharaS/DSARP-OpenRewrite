@@ -15,6 +15,7 @@ from evaluation.summarize_arcan import comparison, cycles
 from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
+                          result_summary,
                           validate_batch_options, validate_max_commits,
                           validate_stop_stage)
 import webui.server as dashboard
@@ -67,6 +68,25 @@ class SuggestionTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_run_summary_never_displays_an_external_prediction_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_root = root / "run"
+            external = root / "cached-predictions.csv"
+            external.write_text("architecture_smell,suggestions\ncycle,Move Class\n")
+            data = {
+                "runRoot": str(run_root), "system": "tika", "versionId": "abc",
+                "command": ["pipeline", "--predictions-csv", str(external)],
+            }
+            with mock.patch.object(dashboard, "PIPELINE_CACHE", root / "cache"):
+                self.assertNotIn("predictions", result_summary(data))
+            current = run_root / "pipeline-results" / "tika_refactoring_suggestions_from_trained_model.csv"
+            current.parent.mkdir(parents=True)
+            current.write_text("architecture_smell,suggestions\ncycle,Move Class\n")
+            summary = result_summary(data)
+            self.assertEqual(summary["predictions"]["count"], 1)
+            self.assertEqual(summary["predictions"]["origin"], "current_run")
+
     def test_arcan_cycles_are_canonicalized_and_deduplicated(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "cycles.csv"

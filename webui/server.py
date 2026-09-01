@@ -799,23 +799,16 @@ def result_summary(data: dict) -> dict:
         path = result / relative
         if path.is_file():
             output[key] = json.loads(path.read_text(encoding="utf-8"))
-    predictions = Path(data["runRoot"]) / "pipeline-results" / f"{data['system']}_refactoring_suggestions_from_trained_model.csv"
-    prediction_origin = "generated_or_archived_in_run"
-    if not predictions.is_file():
-        command = data.get("command") or []
-        try:
-            predictions = Path(command[command.index("--predictions-csv") + 1])
-            prediction_origin = "reused_from_compatible_run"
-        except (ValueError, IndexError, TypeError):
-            pass
-    if not predictions.is_file():
-        predictions = PIPELINE_CACHE / data["system"] / data["versionId"].lower() / "predictions.csv"
-        prediction_origin = "shared_compatible_cache"
+    # A run page is an isolated evidence sandbox. Shared caches and compatible
+    # historical artifacts may be inputs to a run, but they must never appear
+    # as outputs until the pipeline archives them inside this run directory.
+    predictions = (Path(data["runRoot"]) / "pipeline-results"
+                   / f"{data['system']}_refactoring_suggestions_from_trained_model.csv")
     if predictions.is_file():
         with predictions.open(newline="", encoding="utf-8-sig") as handle:
             rows = list(csv.DictReader(handle))
         output["predictions"] = {
-            "count": len(rows), "sample": rows[:25], "origin": prediction_origin,
+            "count": len(rows), "sample": rows[:25], "origin": "current_run",
             "source": str(predictions),
         }
     expected_artifacts = [
