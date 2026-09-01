@@ -35,6 +35,7 @@ CLEAN=0
 PREDICTIONS_EXPLICIT=0
 PROFILE="log4j2"
 TRAINING_DATASET=""
+PRETRAINED_MODEL_DIR=""
 REMINE=0
 ALLOW_RISKY_CANDIDATES=0
 SEVERITY_CATEGORIES="high,medium,low"
@@ -67,6 +68,9 @@ Options:
   --predictions-csv PATH Use an existing prediction CSV when not using --full.
   --training-dataset PATH
                          Reuse an existing mined JSONL dataset while retraining.
+  --pretrained-model-dir PATH
+                         Reuse an existing final_model directory; generate new
+                         target inputs and predictions without mining/training.
   --mining-cache-dir PATH
                          Shared RefactoringMiner cache used by CLI and web runs.
   --remine               Rebuild the shared mining cache instead of reusing it.
@@ -121,6 +125,7 @@ while (($#)); do
     --model-inputs) MODEL_INPUTS="${2:?missing path}"; shift 2 ;;
     --predictions-csv) PREDICTIONS="${2:?missing path}"; PREDICTIONS_EXPLICIT=1; shift 2 ;;
     --training-dataset) TRAINING_DATASET="${2:?missing path}"; shift 2 ;;
+    --pretrained-model-dir) PRETRAINED_MODEL_DIR="${2:?missing path}"; shift 2 ;;
     --mining-cache-dir) MINING_CACHE_DIR="${2:?missing path}"; shift 2 ;;
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
@@ -157,6 +162,9 @@ fi
 # a parameterized notebook must be absolute.
 if [[ -n "$TRAINING_DATASET" && "$TRAINING_DATASET" != /* ]]; then
   TRAINING_DATASET="$(cd "$(dirname "$TRAINING_DATASET")" && pwd)/$(basename "$TRAINING_DATASET")"
+fi
+if [[ -n "$PRETRAINED_MODEL_DIR" ]]; then
+  PRETRAINED_MODEL_DIR="$(cd "$PRETRAINED_MODEL_DIR" && pwd)"
 fi
 if [[ "$BASELINE_CSV_DIR" != /* ]]; then
   BASELINE_CSV_DIR="$(cd "$BASELINE_CSV_DIR" && pwd)"
@@ -459,11 +467,23 @@ if should_run preflight; then
   require_file "$PROJECT_ROOT/evaluation/capture_provenance.py"
   require_file "$CANDIDATE_VALIDATOR"
   require_file "$PROJECT_ROOT/ml/predict_refactorings.py"
-  require_file "$PROJECT_ROOT/ml/prepare_training_dataset.py"
-  require_file "$PROJECT_ROOT/ml/evaluate_rankings.py"
+    require_file "$PROJECT_ROOT/ml/prepare_training_dataset.py"
+    require_file "$PROJECT_ROOT/ml/evaluate_rankings.py"
   require_file "$BASELINE_CSV_DIR/component-metrics.csv"
   require_file "$BASELINE_CSV_DIR/smell-characteristics.csv"
-  require_file "$BASELINE_CSV_DIR/smell-affects.csv"
+    require_file "$BASELINE_CSV_DIR/smell-affects.csv"
+    if [[ -n "$PRETRAINED_MODEL_DIR" ]]; then
+      require_file "$PRETRAINED_MODEL_DIR/config.json"
+      require_file "$PRETRAINED_MODEL_DIR/labels.json"
+      [[ -f "$PRETRAINED_MODEL_DIR/model.safetensors" || -f "$PRETRAINED_MODEL_DIR/pytorch_model.bin" ]] || {
+        echo "Pretrained model has no model.safetensors or pytorch_model.bin: $PRETRAINED_MODEL_DIR" >&2
+        exit 1
+      }
+      [[ -f "$PRETRAINED_MODEL_DIR/tokenizer.json" || -f "$PRETRAINED_MODEL_DIR/vocab.txt" ]] || {
+        echo "Pretrained model has no tokenizer.json or vocab.txt: $PRETRAINED_MODEL_DIR" >&2
+        exit 1
+      }
+    fi
   "$PYTHON" "$PROJECT_ROOT/evaluation/validate_baseline_inputs.py" \
     "$BASELINE_CSV_DIR" --project "$PROJECT_NAME" --version-id "$VERSION_ID" \
     --report "$RESULTS_DIR/baseline-input-validation.json" >/dev/null
@@ -565,7 +585,9 @@ fi
 if should_run mining; then
   heading "Stage: mining"
   if ((FULL)); then
-    if [[ -n "$TRAINING_DATASET" ]]; then
+    if [[ -n "$PRETRAINED_MODEL_DIR" ]]; then
+      echo "Skipped mining; prediction will reuse trained model: $PRETRAINED_MODEL_DIR"
+    elif [[ -n "$TRAINING_DATASET" ]]; then
       echo "Skipped RefactoringMiner; reusing training dataset: $TRAINING_DATASET"
     else
       cache_parent="$(dirname "$MINING_CACHE_DIR")"
@@ -632,8 +654,9 @@ PY
         exit 1
       }
     fi
-    "$PYTHON" - "$TRAINING_DATASET" \
-      "$(dirname "$TRAINING_DATASET")/mining_errors.csv" <<'PY'
+    if [[ -z "$PRETRAINED_MODEL_DIR" ]]; then
+      "$PYTHON" - "$TRAINING_DATASET" \
+        "$(dirname "$TRAINING_DATASET")/mining_errors.csv" <<'PY'
 import csv, sys
 from pathlib import Path
 rows = sum(1 for line in Path(sys.argv[1]).open(encoding="utf-8") if line.strip())
@@ -643,6 +666,7 @@ if Path(sys.argv[2]).is_file():
         errors = sum(1 for _ in csv.DictReader(handle))
 print(f"Validated mining output: {rows:,} training rows, {errors:,} recorded errors")
 PY
+    fi
   else
     echo "Skipped. Use --full to rerun commit mining."
   fi
@@ -651,7 +675,10 @@ fi
 if should_run training; then
   heading "Stage: training"
   if ((FULL)); then
-    TRAINING_DATASET="${TRAINING_DATASET:-$MINING_CACHE_DIR/output/arcan_style_training_dataset.jsonl}"
+    if [[ -n "$PRETRAINED_MODEL_DIR" ]]; then
+      echo "Skipped training; reusing trained model: $PRETRAINED_MODEL_DIR"
+    else
+      TRAINING_DATASET="${TRAINING_DATASET:-$MINING_CACHE_DIR/output/arcan_style_training_dataset.jsonl}"
     require_file "$TRAINING_DATASET"
     RAW_TRAINING_DATASET="$TRAINING_DATASET"
     TRAINING_DATASET="$RUN_ROOT/data/training-dataset.validated.jsonl"
@@ -673,10 +700,11 @@ if should_run training; then
       --output "$RUN_ROOT/notebooks/training.executed.ipynb" \
       "$TRAIN_NOTEBOOK" | tee "$LOG_DIR/training.log"
     require_file "$MODEL_DIR/test_set_prediction_comparison.csv"
-    "$PYTHON" "$PROJECT_ROOT/ml/evaluate_rankings.py" \
-      --comparison-csv "$MODEL_DIR/test_set_prediction_comparison.csv" \
-      --output "$RESULTS_DIR/model-evaluation.json" \
-      | tee "$LOG_DIR/model-evaluation.log"
+      "$PYTHON" "$PROJECT_ROOT/ml/evaluate_rankings.py" \
+        --comparison-csv "$MODEL_DIR/test_set_prediction_comparison.csv" \
+        --output "$RESULTS_DIR/model-evaluation.json" \
+        | tee "$LOG_DIR/model-evaluation.log"
+    fi
   else
     echo "Skipped. Existing predictions will be used."
   fi
@@ -687,9 +715,12 @@ if should_run prediction; then
   if ((FULL)); then
     PREDICTIONS="$RUN_ROOT/pipeline-results/${PROJECT_NAME}_refactoring_suggestions_from_trained_model.csv"
     mkdir -p "$(dirname "$PREDICTIONS")"
+    if [[ -n "$PRETRAINED_MODEL_DIR" ]]; then
+      printf '%s\n' "$PRETRAINED_MODEL_DIR" >"$RUN_ROOT/pipeline-results/pretrained-model-source.txt"
+    fi
     "$PYTHON" "$PROJECT_ROOT/ml/predict_refactorings.py" \
       --model-inputs "$MODEL_INPUTS" \
-      --model-dir "$MODEL_DIR/final_model" \
+      --model-dir "${PRETRAINED_MODEL_DIR:-$MODEL_DIR/final_model}" \
       --output "$PREDICTIONS" \
       | tee "$LOG_DIR/prediction.log"
   else

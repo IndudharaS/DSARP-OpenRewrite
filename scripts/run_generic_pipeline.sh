@@ -10,6 +10,7 @@ VERSION_ID=""
 BASELINE_CSV_DIR="$PROJECT_ROOT/baseline_csv"
 PREDICTIONS=""
 TRAINING_DATASET=""
+PRETRAINED_MODEL_DIR=""
 MINING_CACHE_DIR=""
 REMINE=0
 REUSE_PREDICTIONS=0
@@ -40,6 +41,9 @@ Inputs:
   --predictions-csv PATH    Reuse model predictions and skip mining/training.
   --reuse-predictions       Reuse predictions cached for this system+commit.
   --training-dataset PATH   Reuse mined JSONL records but retrain the model.
+  --pretrained-model-dir PATH
+                            Generate inputs and predictions using an existing
+                            final_model directory; skip mining and training.
   --mining-cache-dir PATH   Override the shared RefactoringMiner cache folder.
   --remine                  Generate fresh shared mining output.
   --profile PROFILE         generic or log4j2. Defaults to log4j2 for the
@@ -74,6 +78,7 @@ while (($#)); do
     --predictions-csv) PREDICTIONS="${2:?missing path}"; FULL=0; shift 2 ;;
     --reuse-predictions) REUSE_PREDICTIONS=1; FULL=0; shift ;;
     --training-dataset) TRAINING_DATASET="${2:?missing path}"; FULL=1; shift 2 ;;
+    --pretrained-model-dir) PRETRAINED_MODEL_DIR="${2:?missing path}"; FULL=1; shift 2 ;;
     --mining-cache-dir) MINING_CACHE_DIR="${2:?missing path}"; shift 2 ;;
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
@@ -129,6 +134,9 @@ if ((FULL)); then
   fi
   if [[ -n "$TRAINING_DATASET" ]]; then
     arguments+=(--training-dataset "$TRAINING_DATASET")
+  fi
+  if [[ -n "$PRETRAINED_MODEL_DIR" ]]; then
+    arguments+=(--pretrained-model-dir "$PRETRAINED_MODEL_DIR")
   fi
 else
   arguments+=(--predictions-csv "$PREDICTIONS")

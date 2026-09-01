@@ -167,6 +167,18 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 dashboard.validate_run_name({"runName": value})
 
+    def test_pretrained_model_directory_is_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary) / "final_model"
+            model.mkdir()
+            for name in ("config.json", "labels.json", "model.safetensors", "tokenizer.json"):
+                (model / name).write_text("{}")
+            self.assertEqual(dashboard.validate_pretrained_model(
+                {"pretrainedModelDir": str(model)}), str(model.resolve()))
+            (model / "labels.json").unlink()
+            with self.assertRaises(ValueError):
+                dashboard.validate_pretrained_model({"pretrainedModelDir": str(model)})
+
     def test_concatenated_metadata_recovers_latest_object(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "metadata.json"

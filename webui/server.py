@@ -510,12 +510,28 @@ def validate_run_name(payload: dict) -> str:
     return run_name
 
 
+def validate_pretrained_model(payload: dict) -> str:
+    value = str(payload.get("pretrainedModelDir", "")).strip()
+    if not value:
+        raise ValueError("Select an existing trained model directory")
+    model = Path(value).expanduser().resolve()
+    required = ("config.json", "labels.json")
+    missing = [name for name in required if not (model / name).is_file()]
+    if not ((model / "model.safetensors").is_file() or (model / "pytorch_model.bin").is_file()):
+        missing.append("model.safetensors or pytorch_model.bin")
+    if not ((model / "tokenizer.json").is_file() or (model / "vocab.txt").is_file()):
+        missing.append("tokenizer.json or vocab.txt")
+    if missing:
+        raise ValueError(f"Trained model directory is missing: {', '.join(missing)}")
+    return str(model)
+
+
 def submission_key(payload: dict) -> str:
     fields = {key: payload.get(key) for key in (
         "system", "repositoryUrl", "versionId", "executionTarget", "mode",
         "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
         "startBatch", "maxBatches", "resumeRunId", "resumeStage", "stopStage",
-        "workflowGoal", "maxCommitsPerRepository", "runName",
+        "workflowGoal", "maxCommitsPerRepository", "runName", "pretrainedModelDir",
     )}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -550,6 +566,7 @@ def start_hpc_run(payload: dict) -> dict:
     if workflow_goal in {"predictions_shared", "complete_shared"} and not shared_mining_summary()["available"]:
         raise ValueError("The selected workflow requires shared RefactoringMiner output; run fresh mining first")
     mode = str(payload.get("mode", "latest_predictions"))
+    pretrained_model = validate_pretrained_model(payload) if mode == "pretrained_model" else ""
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky = bool(payload.get("allowRiskyCandidates", False))
     resume_id = str(payload.get("resumeRunId", "")).strip()
@@ -586,6 +603,8 @@ def start_hpc_run(payload: dict) -> dict:
     elif mode == "training":
         training = str(safe_upload(inputs, extra or {}, "training.jsonl"))
         pipeline_mode = "training"
+    elif mode == "pretrained_model":
+        pipeline_mode = "pretrained_model"
     elif mode == "full":
         pipeline_mode = "fresh" if fresh_mining else "train"
     else:
@@ -599,6 +618,7 @@ def start_hpc_run(payload: dict) -> dict:
         "SYSTEM": system, "REPOSITORY_URL": repository, "VERSION_ID": version,
         "BASELINE_CSV_DIR": str(baseline), "PIPELINE_MODE": pipeline_mode,
         "PREDICTIONS_CSV": predictions, "TRAINING_DATASET": training,
+        "PRETRAINED_MODEL_DIR": pretrained_model,
         "SEVERITY_CATEGORIES": ",".join(categories), "BATCH_SIZE": str(batch_size),
         "START_BATCH": str(start_batch), "MAX_BATCHES": str(max_batches),
         "MAX_COMMITS_PER_REPO": str(max_commits),
@@ -628,6 +648,7 @@ def start_hpc_run(payload: dict) -> dict:
         "allowRiskyCandidates": allow_risky, "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
         "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
+        "pretrainedModelDir": pretrained_model or None,
         "status": "queued", "stage": "queued", "createdAt": now(), "stageStartedAt": now(),
         "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
         "logFile": str(log), "slurmJobId": job_id, "logicalRunId": resume_id or job_id,
@@ -665,6 +686,7 @@ def start_run(payload: dict) -> dict:
     if system == "logging-log4j2":
         command += ["--profile", "log4j2"]
     mode = payload.get("mode", "full")
+    pretrained_model = validate_pretrained_model(payload) if mode == "pretrained_model" else ""
     extra = payload.get("extraFile")
     if mode == "predictions":
         path = safe_upload(inputs, extra or {}, "predictions.csv")
@@ -675,6 +697,8 @@ def start_run(payload: dict) -> dict:
     elif mode == "latest_predictions":
         path = latest_compatible_predictions(system, version, run_id)
         command += ["--predictions-csv", str(path)]
+    elif mode == "pretrained_model":
+        command += ["--pretrained-model-dir", pretrained_model]
     elif mode != "full":
         raise ValueError("Unknown run mode")
     fresh_mining = bool(payload.get("freshMining", False))
@@ -699,6 +723,7 @@ def start_run(payload: dict) -> dict:
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
             "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
+            "pretrainedModelDir": pretrained_model or None,
             "status": "running", "stage": "starting", "createdAt": now(), "stageStartedAt": now(),
             "finishedAt": None, "exitCode": None, "command": command, "runRoot": str(run_root),
             "logFile": str(log)}

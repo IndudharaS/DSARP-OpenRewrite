@@ -57,6 +57,7 @@ PIPELINE_MODE="${PIPELINE_MODE:-reuse_predictions}"
 MAX_COMMITS_PER_REPO="${MAX_COMMITS_PER_REPO:-500}"
 PREDICTIONS="${PREDICTIONS_CSV:-$PROJECT_ROOT/shared/pipeline-cache/$SYSTEM/${VERSION_ID,,}/predictions.csv}"
 TRAINING_DATASET="${TRAINING_DATASET:-}"
+PRETRAINED_MODEL_DIR="${PRETRAINED_MODEL_DIR:-}"
 RUN_ID="${RESUME_RUN_ID:-$SLURM_JOB_ID}"
 RUN_ROOT="${RUN_ROOT:-$PROJECT_SPACE/runs/$SYSTEM/$RUN_ID}"
 
@@ -74,8 +75,10 @@ if [[ "$PIPELINE_MODE" == "reuse_predictions" ]]; then
   required+=("$PREDICTIONS")
 elif [[ "$PIPELINE_MODE" == "training" ]]; then
   required+=("$TRAINING_DATASET")
+elif [[ "$PIPELINE_MODE" == "pretrained_model" ]]; then
+  required+=("$PRETRAINED_MODEL_DIR/config.json" "$PRETRAINED_MODEL_DIR/labels.json")
 elif [[ "$PIPELINE_MODE" != "fresh" && "$PIPELINE_MODE" != "train" ]]; then
-  echo "PIPELINE_MODE must be fresh, train, training or reuse_predictions: $PIPELINE_MODE" >&2
+  echo "PIPELINE_MODE must be fresh, train, training, pretrained_model or reuse_predictions: $PIPELINE_MODE" >&2
   exit 2
 fi
 for path in "${required[@]}"; do
@@ -122,6 +125,8 @@ elif [[ "$PIPELINE_MODE" == "reuse_predictions" ]]; then
   pipeline_input_arguments+=(--predictions-csv "$PREDICTIONS")
 elif [[ "$PIPELINE_MODE" == "training" ]]; then
   pipeline_input_arguments+=(--training-dataset "$TRAINING_DATASET")
+elif [[ "$PIPELINE_MODE" == "pretrained_model" ]]; then
+  pipeline_input_arguments+=(--pretrained-model-dir "$PRETRAINED_MODEL_DIR")
 fi
 
 pipeline_policy_arguments=()
