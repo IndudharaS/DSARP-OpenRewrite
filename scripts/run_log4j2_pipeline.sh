@@ -470,6 +470,7 @@ if should_run preflight; then
   require_file "$PROJECT_ROOT/ml/predict_refactorings.py"
     require_file "$PROJECT_ROOT/ml/prepare_training_dataset.py"
     require_file "$PROJECT_ROOT/ml/evaluate_rankings.py"
+    require_file "$PROJECT_ROOT/ml/train_refactoring_model.py"
   require_file "$BASELINE_CSV_DIR/component-metrics.csv"
   require_file "$BASELINE_CSV_DIR/smell-characteristics.csv"
     require_file "$BASELINE_CSV_DIR/smell-affects.csv"
@@ -500,7 +501,6 @@ if should_run preflight; then
   if ((FULL)); then
     require_file "$JUPYTER"
     require_file "$PROJECT_ROOT/csv_parser.ipynb"
-    require_file "$PROJECT_ROOT/DISTILBERT_IMPROVED_DATA_TRAINED_MODEL.ipynb"
     if [[ -n "$TRAINING_DATASET" ]]; then
       require_file "$TRAINING_DATASET"
       [[ -s "$TRAINING_DATASET" ]] || { echo "Training dataset is empty: $TRAINING_DATASET" >&2; exit 1; }
@@ -688,25 +688,32 @@ if should_run training; then
       --output "$TRAINING_DATASET" \
       --report "$RESULTS_DIR/training-data-quality.json" \
       | tee "$LOG_DIR/training-data-quality.log"
-    TRAIN_NOTEBOOK="$RUN_ROOT/notebooks/training.parameterized.ipynb"
-    parameterize_notebook \
-      "$PROJECT_ROOT/DISTILBERT_IMPROVED_DATA_TRAINED_MODEL.ipynb" \
-      "$TRAIN_NOTEBOOK" \
-      'C:\dsarp_outputs\improved_dataset\improved_multimetric_arch_smell_dataset.jsonl' \
-      "$TRAINING_DATASET" \
-      'C:\dsarp_outputs\models\distilbert_improved_strict_ranked_top5' \
-      "$MODEL_DIR"
-    "$JUPYTER" nbconvert --execute --to notebook \
-      --ExecutePreprocessor.timeout=-1 \
-      --output "$RUN_ROOT/notebooks/training.executed.ipynb" \
-      "$TRAIN_NOTEBOOK" | tee "$LOG_DIR/training.log"
+    "$PYTHON" "$PROJECT_ROOT/ml/train_refactoring_model.py" \
+      --dataset "$TRAINING_DATASET" \
+      --model-output "$MODEL_DIR" \
+      | tee "$LOG_DIR/training.log"
     require_file "$MODEL_DIR/test_set_prediction_comparison.csv"
       "$PYTHON" "$PROJECT_ROOT/ml/evaluate_rankings.py" \
         --comparison-csv "$MODEL_DIR/test_set_prediction_comparison.csv" \
+        --split-manifest "$MODEL_DIR/split-manifest.json" \
         --output "$RESULTS_DIR/model-evaluation.json" \
         | tee "$LOG_DIR/model-evaluation.log"
 
       shared_model_parent="$(dirname "$SHARED_MODEL_DIR")"
+      model_qualified="$("$PYTHON" - "$RESULTS_DIR/model-evaluation.json" <<'PY'
+import json, sys
+print("true" if json.load(open(sys.argv[1], encoding="utf-8"))
+      .get("automatic_recommendation_qualified") else "false")
+PY
+)"
+      if [[ "$model_qualified" == "true" ]]; then
+        publish_target="$SHARED_MODEL_DIR"
+        publish_kind="qualified default"
+      else
+        candidate_name="${SLURM_JOB_ID:-$(date +%Y%m%d-%H%M%S)}"
+        publish_target="$shared_model_parent/candidates/$candidate_name"
+        publish_kind="research candidate (default unchanged)"
+      fi
       shared_model_lock="$shared_model_parent/.default.lock"
       mkdir -p "$shared_model_parent"
       while ! mkdir "$shared_model_lock" 2>/dev/null; do
@@ -714,7 +721,7 @@ if should_run training; then
         sleep 5
       done
       trap '[[ -n "${shared_model_lock:-}" && -d "$shared_model_lock" ]] && rm -rf "$shared_model_lock"; [[ -n "${shared_model_staging:-}" && -d "$shared_model_staging" ]] && rm -rf "$shared_model_staging"' EXIT INT TERM
-      shared_model_staging="$shared_model_parent/.default-staging-${SLURM_JOB_ID:-$$}"
+      shared_model_staging="$shared_model_parent/.model-staging-${SLURM_JOB_ID:-$$}"
       rm -rf "$shared_model_staging"
       mkdir -p "$shared_model_staging"
       cp -a "$MODEL_DIR/final_model" "$shared_model_staging/final_model"
@@ -730,17 +737,19 @@ Path(sys.argv[1]).write_text(json.dumps({
     "modelDirectory": "final_model",
 }, indent=2) + "\n", encoding="utf-8")
 PY
-      if [[ -d "$SHARED_MODEL_DIR" ]]; then
+      if [[ "$model_qualified" == "true" && -d "$SHARED_MODEL_DIR" ]]; then
         shared_model_backup="$shared_model_parent/default-backup-$(date +%Y%m%d-%H%M%S)"
         echo "Backing up previous shared trained model to $shared_model_backup"
         mv "$SHARED_MODEL_DIR" "$shared_model_backup"
       fi
-      mv "$shared_model_staging" "$SHARED_MODEL_DIR"
+      mkdir -p "$(dirname "$publish_target")"
+      [[ ! -e "$publish_target" ]] || { echo "Model publication target exists: $publish_target" >&2; exit 1; }
+      mv "$shared_model_staging" "$publish_target"
       rm -rf "$shared_model_lock"
       shared_model_lock=""
       shared_model_staging=""
       trap - EXIT INT TERM
-      echo "Published shared trained model: $SHARED_MODEL_DIR/final_model"
+      echo "Published $publish_kind: $publish_target/final_model"
     fi
   else
     echo "Skipped. Existing predictions will be used."
