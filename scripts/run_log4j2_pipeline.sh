@@ -26,6 +26,7 @@ LOG_DIR="$RUN_ROOT/logs"
 MINING_DIR="$RUN_ROOT/mining"
 MINING_OUTPUT="$RUN_ROOT/mining-output"
 MINING_CACHE_DIR="$PROJECT_ROOT/shared/refactoring-miner/default"
+SHARED_MODEL_DIR="$PROJECT_ROOT/shared/trained-model/default"
 MODEL_DIR="$RUN_ROOT/models/distilbert_improved_strict_ranked_top5"
 MODEL_INPUTS="$PROJECT_ROOT/pipeline_results/logging_log4j2_model_inputs_from_csv.csv"
 PREDICTIONS=""
@@ -704,6 +705,42 @@ if should_run training; then
         --comparison-csv "$MODEL_DIR/test_set_prediction_comparison.csv" \
         --output "$RESULTS_DIR/model-evaluation.json" \
         | tee "$LOG_DIR/model-evaluation.log"
+
+      shared_model_parent="$(dirname "$SHARED_MODEL_DIR")"
+      shared_model_lock="$shared_model_parent/.default.lock"
+      mkdir -p "$shared_model_parent"
+      while ! mkdir "$shared_model_lock" 2>/dev/null; do
+        echo "Another experiment is publishing the shared trained model; waiting..."
+        sleep 5
+      done
+      trap '[[ -n "${shared_model_lock:-}" && -d "$shared_model_lock" ]] && rm -rf "$shared_model_lock"; [[ -n "${shared_model_staging:-}" && -d "$shared_model_staging" ]] && rm -rf "$shared_model_staging"' EXIT INT TERM
+      shared_model_staging="$shared_model_parent/.default-staging-${SLURM_JOB_ID:-$$}"
+      rm -rf "$shared_model_staging"
+      mkdir -p "$shared_model_staging"
+      cp -a "$MODEL_DIR/final_model" "$shared_model_staging/final_model"
+      cp "$RESULTS_DIR/model-evaluation.json" "$shared_model_staging/model-evaluation.json"
+      cp "$RESULTS_DIR/training-data-quality.json" "$shared_model_staging/training-data-quality.json"
+      "$PYTHON" - "$shared_model_staging/manifest.json" "$RUN_ROOT" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "createdAt": datetime.now(timezone.utc).isoformat(),
+    "sourceRunRoot": str(Path(sys.argv[2]).resolve()),
+    "modelDirectory": "final_model",
+}, indent=2) + "\n", encoding="utf-8")
+PY
+      if [[ -d "$SHARED_MODEL_DIR" ]]; then
+        shared_model_backup="$shared_model_parent/default-backup-$(date +%Y%m%d-%H%M%S)"
+        echo "Backing up previous shared trained model to $shared_model_backup"
+        mv "$SHARED_MODEL_DIR" "$shared_model_backup"
+      fi
+      mv "$shared_model_staging" "$SHARED_MODEL_DIR"
+      rm -rf "$shared_model_lock"
+      shared_model_lock=""
+      shared_model_staging=""
+      trap - EXIT INT TERM
+      echo "Published shared trained model: $SHARED_MODEL_DIR/final_model"
     fi
   else
     echo "Skipped. Existing predictions will be used."

@@ -30,6 +30,7 @@ ASSETS = ROOT / "webui" / "static"
 PIPELINE = ROOT / "scripts" / "run_generic_pipeline.sh"
 PIPELINE_CACHE = ROOT / "shared" / "pipeline-cache"
 MINING_MANIFEST = ROOT / "shared" / "refactoring-miner" / "default" / "cache-manifest.json"
+DEFAULT_TRAINED_MODEL = ROOT / "shared" / "trained-model" / "default" / "final_model"
 HPC_SCRIPT = ROOT / "hpc" / "noctua_pipeline.sbatch"
 EXECUTION_MODE = "local"
 HPC_PROJECT_SPACE = Path(os.environ.get("DSARP_HPC_PROJECT_SPACE", f"/scratch/hpc-prf-dssecs/{os.environ.get('USER', '')}"))
@@ -511,10 +512,9 @@ def validate_run_name(payload: dict) -> str:
 
 
 def validate_pretrained_model(payload: dict) -> str:
-    value = str(payload.get("pretrainedModelDir", "")).strip()
-    if not value:
-        raise ValueError("Select an existing trained model directory")
-    model = Path(value).expanduser().resolve()
+    raw = payload.get("pretrainedModelDir", "")
+    value = "" if raw is None else str(raw).strip()
+    model = Path(value).expanduser().resolve() if value else DEFAULT_TRAINED_MODEL.resolve()
     required = ("config.json", "labels.json")
     missing = [name for name in required if not (model / name).is_file()]
     if not ((model / "model.safetensors").is_file() or (model / "pytorch_model.bin").is_file()):
@@ -524,6 +524,28 @@ def validate_pretrained_model(payload: dict) -> str:
     if missing:
         raise ValueError(f"Trained model directory is missing: {', '.join(missing)}")
     return str(model)
+
+
+def shared_model_summary() -> dict:
+    try:
+        model = Path(validate_pretrained_model({}))
+    except ValueError:
+        return {"available": False, "path": str(DEFAULT_TRAINED_MODEL)}
+    manifest_path = model.parent / "manifest.json"
+    manifest = {}
+    try:
+        if manifest_path.is_file():
+            manifest = read_json_file(manifest_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    weights = model / "model.safetensors"
+    if not weights.is_file():
+        weights = model / "pytorch_model.bin"
+    return {
+        "available": True, "path": str(model), "size": weights.stat().st_size,
+        "createdAt": manifest.get("createdAt"),
+        "sourceRunRoot": manifest.get("sourceRunRoot"),
+    }
 
 
 def submission_key(payload: dict) -> str:
@@ -819,7 +841,8 @@ class Handler(BaseHTTPRequestHandler):
                                            "executionMode": EXECUTION_MODE,
                                            "hpcAvailable": hpc_available(),
                                            "hpcProjectSpace": str(HPC_PROJECT_SPACE),
-                                           "sharedMining": shared_mining_summary()})
+                                           "sharedMining": shared_mining_summary(),
+                                           "sharedModel": shared_model_summary()})
             if parsed.path == "/api/runs":
                 discover_hpc_runs()
                 values = []

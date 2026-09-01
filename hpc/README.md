@@ -100,19 +100,21 @@ then prepares training data, trains the model, generates new predictions, and
 continues through OpenRewrite and Arcan.
 
 To generate predictions for a new target without retraining, select
-**Predictions using trained model** in the dashboard and provide the complete
-`final_model` directory from a compatible training run. The equivalent Slurm
-mode is `pretrained_model`:
+**Predictions using trained model** in the dashboard. It automatically uses
+`shared/trained-model/default/final_model`; no path entry is required. The
+equivalent Slurm mode is `pretrained_model`:
 
 ```bash
-sbatch --export=ALL,PIPELINE_MODE=pretrained_model,PRETRAINED_MODEL_DIR=/scratch/hpc-prf-dssecs/$USER/runs/tika/34173769/models/distilbert_improved_strict_ranked_top5/final_model,STOP_STAGE=prediction \
+sbatch --export=ALL,PIPELINE_MODE=pretrained_model,STOP_STAGE=prediction \
   hpc/noctua_pipeline.sbatch
 ```
 
 This mode still creates target model inputs from the three baseline CSV files,
 but skips RefactoringMiner and DistilBERT training. Retrain only when the mined
 training evidence, label/input schema, base model, or training configuration
-changes.
+changes. A completed retraining run publishes its `final_model` to the shared
+default using a lock and atomic directory replacement; the previous default is
+retained as `shared/trained-model/default-backup-<timestamp>`.
 
 `MAX_COMMITS_PER_REPO` controls the mining limit without editing the pipeline
 script. Five repositories are configured, so `2000` represents a maximum of

@@ -20,8 +20,11 @@ Open <http://127.0.0.1:8765> and keep the terminal running. Stop the server with
 - offers outcome-based workflows for mining-only output, prediction generation
   from an existing trained model, intentional retraining from shared mining
   data, complete shared/fresh runs, fast verified runs, and uploaded inputs;
-- accepts a compatible `final_model` directory for prediction-only experiments;
-  these generate target inputs but skip mining and training;
+- automatically uses `shared/trained-model/default/final_model` for
+  prediction-only experiments; these generate target inputs but skip mining
+  and training;
+- publishes every completed retraining result as the new default model while
+  moving the previous default to a timestamped backup;
 - lets fresh workflows set commits per training repository and shows the
   calculated maximum across all five repositories;
 - reports the shared cache's configured maximum, actual mined commit rows and

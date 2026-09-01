@@ -22,6 +22,7 @@ shared/pipeline-cache/*/*/model-evaluation.json
 shared/pipeline-cache/*/*/training-data-quality.json
 shared/models/*/
 shared/training/*/*.jsonl
+shared/trained-model/
 
 # Downloaded third-party tools and runtimes
 tools/

@@ -179,6 +179,15 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 dashboard.validate_pretrained_model({"pretrainedModelDir": str(model)})
 
+    def test_default_shared_model_is_used_without_user_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary) / "shared" / "trained-model" / "default" / "final_model"
+            model.mkdir(parents=True)
+            for name in ("config.json", "labels.json", "model.safetensors", "tokenizer.json"):
+                (model / name).write_text("{}")
+            with mock.patch.object(dashboard, "DEFAULT_TRAINED_MODEL", model):
+                self.assertEqual(dashboard.validate_pretrained_model({}), str(model.resolve()))
+
     def test_concatenated_metadata_recovers_latest_object(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "metadata.json"

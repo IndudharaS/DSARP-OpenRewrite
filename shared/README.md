@@ -12,8 +12,10 @@ and small provenance records remain versionable.
   with exactly one system and commit. Successful web runs refresh this cache.
 - `pipeline-cache/<system>/<commit>/provenance.json`: repository and source-run
   identity for the cached predictions.
-- `models/default/final_model/`: optional local trained model retained for
-  reproducibility. Model weights are too large for ordinary GitHub storage.
+- `trained-model/default/final_model/`: active model automatically reused by
+  prediction-only runs. Successful retraining atomically replaces this default
+  and retains the previous version in a timestamped backup. Model weights are
+  excluded from Git.
 
 Never reuse predictions for a different commit: their source entities and
 packages may no longer exist. Use a full workflow to regenerate them.
