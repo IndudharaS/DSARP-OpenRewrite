@@ -347,10 +347,7 @@ def generate(args: argparse.Namespace) -> None:
         elif unknown_packages:
             record.reason = f"affected packages not present at this revision: {', '.join(unknown_packages[:8])}"
         elif not ranked_predictions:
-            if row.get("prediction_status") == "abstained_low_confidence":
-                record.reason = "model abstained because no label passed its validation-derived threshold"
-            else:
-                record.reason = "model produced no ranked recommendation"
+            record.reason = "model produced no ranked recommendation"
         elif not supported:
             labels = ", ".join(name for name, _ in ranked_predictions)
             record.reason = f"ranked recommendations lack parameters for safe automation: {labels}"

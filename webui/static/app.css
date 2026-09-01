@@ -37,4 +37,3 @@ html[data-theme="dark"] .goal-card,html[data-theme="dark"] .preset-stage{backgro
 html[data-theme="dark"] .prediction-record{background:#121d2e}html[data-theme="dark"] .element-tags span{border-color:#344863;background:#192a40;color:#b9d6ff}html[data-theme="dark"] .suggestion-list li{background:#172235}html[data-theme="dark"] .suggestion-list li:before{background:#21436a;color:#b9d6ff}
 @media(max-width:1100px){.prediction-record{grid-template-columns:125px minmax(220px,1fr)}.prediction-record section:last-child{grid-column:2}}
 @media(max-width:700px){.prediction-record{grid-template-columns:1fr}.prediction-record section:last-child{grid-column:auto}}
-.prediction-smell small{display:block;margin-top:8px;color:var(--muted);font-size:9px;line-height:1.45;overflow-wrap:anywhere}

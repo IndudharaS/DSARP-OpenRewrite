@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import re
 from collections import Counter
 from pathlib import Path
 
@@ -24,7 +22,6 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--minimum-records", type=int, default=50)
     parser.add_argument("--minimum-label-support", type=int, default=5)
-    parser.add_argument("--recommended-label-support", type=int, default=25)
     args = parser.parse_args()
 
     accepted: list[dict] = []
@@ -59,8 +56,6 @@ def main() -> None:
             reasons["partially_unsupported_labels_removed"] += len(selected - set(supported))
             row["selected_refactoring_labels"] = "|".join(supported)
             row["target_text"] = " | ".join(supported)
-        normalized_input = re.sub(r"\s+", " ", str(row["input_text"]).strip().lower())
-        row["evidence_group_id"] = hashlib.sha256(normalized_input.encode("utf-8")).hexdigest()[:16]
         key = (
             str(row["repository"]), str(row["commit"]), str(row["architecture_smell"]),
             str(row["affected_elements"]), str(row["selected_refactoring_labels"]),
@@ -97,16 +92,10 @@ def main() -> None:
     repositories = Counter(str(row["repository"]) for row in accepted)
     smells = Counter(str(row["architecture_smell"]) for row in accepted)
     labels: Counter[str] = Counter()
-    label_pairs: Counter[str] = Counter()
     for row in accepted:
-        row_labels = sorted(value for value in str(row["selected_refactoring_labels"]).split("|") if value)
-        labels.update(row_labels)
-        label_pairs.update(f"{left} + {right}" for index, left in enumerate(row_labels)
-                           for right in row_labels[index + 1:])
-    fingerprints = Counter(str(row["evidence_group_id"]) for row in accepted)
-    commits_by_repository = Counter((str(row["repository"]), str(row["commit"])) for row in accepted)
+        labels.update(value for value in str(row["selected_refactoring_labels"]).split("|") if value)
     report = {
-        "schema_version": 2,
+        "schema_version": 1,
         "input_records": raw_count,
         "accepted_records": len(accepted),
         "rejected_records": raw_count - len(accepted),
@@ -114,23 +103,9 @@ def main() -> None:
         "minimum_label_support": args.minimum_label_support,
         "removed_rare_labels": sorted(rare_labels),
         "unique_commits": len({str(row["commit"]) for row in accepted}),
-        "unique_repository_commits": len(commits_by_repository),
-        "duplicate_repository_commit_groups": sum(count > 1 for count in commits_by_repository.values()),
-        "unique_input_fingerprints": len(fingerprints),
-        "repeated_input_fingerprint_groups": sum(count > 1 for count in fingerprints.values()),
         "repositories": dict(repositories),
         "architecture_smells": dict(smells),
         "refactoring_labels": dict(labels),
-        "label_cooccurrence": dict(label_pairs.most_common()),
-        "recommended_label_support": args.recommended_label_support,
-        "labels_below_recommended_support": {
-            label: count for label, count in sorted(labels.items())
-            if count < args.recommended_label_support
-        },
-        "external_ground_truth_status": {
-            "available": False,
-            "note": "Cross-project labels for target systems such as Struts require an independent human-labelled dataset."
-        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(json.dumps(row) + "\n" for row in accepted), encoding="utf-8")
