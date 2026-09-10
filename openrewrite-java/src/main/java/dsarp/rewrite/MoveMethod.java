@@ -87,7 +87,8 @@ public class MoveMethod extends ScanningRecipe<MoveMethod.Accumulator> {
                     }
                     List<Statement> statements = new ArrayList<>(cd.getBody().getStatements());
                     statements.add(acc.method.withPrefix(org.openrewrite.java.tree.Space.format("\n\n")));
-                    return cd.withBody(cd.getBody().withStatements(statements));
+                    J.ClassDeclaration updated = cd.withBody(cd.getBody().withStatements(statements));
+                    return autoFormat(updated, ctx);
                 }
                 return cd;
             }
