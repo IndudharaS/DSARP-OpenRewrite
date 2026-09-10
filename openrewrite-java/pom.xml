@@ -10,7 +10,8 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <!-- Match rewrite-maven-plugin 6.12.0 used by the pipeline runners. -->
     <rewrite.version>8.56.0</rewrite.version>
-    <junit.version>5.11.4</junit.version>
+    <!-- Keep the Jupiter API and engine aligned with rewrite-test 8.56.0. -->
+    <junit.version>5.13.2</junit.version>
   </properties>
   <dependencies>
     <dependency><groupId>org.openrewrite</groupId><artifactId>rewrite-java</artifactId><version>${rewrite.version}</version></dependency>
