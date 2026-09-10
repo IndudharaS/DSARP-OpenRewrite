@@ -18,6 +18,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from openrewrite.resolvers.move_method import resolve_move_method
+from openrewrite.resolvers.move_class import rank_semantic_move_classes
+from openrewrite.semantic_analysis import load_methods
+
 
 PACKAGE_RE = re.compile(r"^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;", re.MULTILINE)
 IMPORT_RE = re.compile(
@@ -66,6 +70,17 @@ class ManifestRecord:
     severity: str
     severity_score: int
     severity_reason: str
+    refactoring_kind: str | None = None
+    analysis_source: str | None = None
+    source_member: str | None = None
+    source_signature: str | None = None
+    destination_member: str | None = None
+    destination_class: str | None = None
+    foreign_affinity: float | None = None
+    destination_class_affinity: float | None = None
+    source_state_penalty: float | None = None
+    structural_score: float | None = None
+    precondition_status: str | None = None
 
 
 def classify_severity(smell: str, affected_count: int) -> tuple[str, int, str]:
@@ -257,6 +272,22 @@ recipeList:
 """
 
 
+def move_method_recipe_yaml(recipe_name: str, source_class: str, signature: str,
+                            target_class: str, description: str) -> str:
+    return f"""---
+type: specs.openrewrite.org/v1beta/recipe
+name: {recipe_name}
+displayName: Move {signature} to {target_class.rsplit('.', 1)[-1]}
+description: >-
+  {description}
+recipeList:
+  - dsarp.rewrite.MoveMethod:
+      sourceClass: {source_class}
+      methodPattern: {signature}
+      targetClass: {target_class}
+"""
+
+
 def aggregate_recipe_yaml(records: list[ManifestRecord]) -> str:
     recipe_name = "generated.architecture.ApplyAllCandidates"
     lines = [
@@ -270,13 +301,19 @@ def aggregate_recipe_yaml(records: list[ManifestRecord]) -> str:
     for record in records:
         if record.status != "ready_for_dry_run":
             continue
-        lines.extend(
-            [
+        if record.refactoring_kind == "Move Method":
+            lines.extend([
+                "  - dsarp.rewrite.MoveMethod:",
+                f"      sourceClass: {record.source_type}",
+                f"      methodPattern: {record.source_signature}",
+                f"      targetClass: {record.destination_class}",
+            ])
+        else:
+            lines.extend([
                 "  - org.openrewrite.java.ChangeType:",
                 f"      oldFullyQualifiedTypeName: {record.source_type}",
                 f"      newFullyQualifiedTypeName: {record.destination_type}",
-            ]
-        )
+            ])
     return "\n".join(lines) + "\n"
 
 
@@ -287,8 +324,10 @@ def generate(args: argparse.Namespace) -> None:
     recipe_dir.mkdir(parents=True, exist_ok=True)
 
     types, packages = parse_repository(repository)
+    semantic_methods = load_methods(getattr(args, "semantic_analysis", None))
     records: list[ManifestRecord] = []
     claimed_sources: dict[str, int] = {}
+    claimed_methods: set[tuple[str, str]] = set()
     candidate_count = 0
 
     with args.predictions.open(newline="", encoding="utf-8-sig") as handle:
@@ -308,6 +347,9 @@ def generate(args: argparse.Namespace) -> None:
         selected_severities = set(getattr(args, "severity_categories", "high,medium,low").split(","))
         ranked_predictions = ranked_suggestions(row[args.suggestions_column])
         top_refactoring = ranked_predictions[0][0] if ranked_predictions else None
+        first_supported = next(((rank, name, score) for rank, (name, score) in
+                                enumerate(ranked_predictions, start=1)
+                                if name in {"Move Class", "Move Method"}), None)
         supported = next(
             (
                 (rank, name, score)
@@ -338,6 +380,7 @@ def generate(args: argparse.Namespace) -> None:
             severity=severity,
             severity_score=severity_score,
             severity_reason=severity_reason,
+            refactoring_kind=first_supported[1] if first_supported else None,
         )
 
         unknown_packages = sorted(affected_set.difference(packages))
@@ -348,13 +391,69 @@ def generate(args: argparse.Namespace) -> None:
             record.reason = f"affected packages not present at this revision: {', '.join(unknown_packages[:8])}"
         elif not ranked_predictions:
             record.reason = "model produced no ranked recommendation"
-        elif not supported:
+        elif not first_supported:
             labels = ", ".join(name for name, _ in ranked_predictions)
-            record.reason = f"ranked recommendations lack parameters for safe automation: {labels}"
+            record.status = "unsupported_refactoring"
+            record.reason = ("ranked recommendations lack a supported resolver: " + labels +
+                             "; Extract Method requires statement/control/data-flow analysis")
         elif len(affected_set) < 2:
-            record.reason = "Move Class requires at least two affected packages"
+            record.reason = f"{first_supported[1]} requires at least two affected packages"
+        elif first_supported[1] == "Move Method":
+            candidate = resolve_move_method(semantic_methods, affected_set, set(types), claimed_methods)
+            record.predicted_refactoring = "Move Method"
+            record.model_rank = first_supported[0]
+            record.model_score = first_supported[2]
+            record.analysis_source = "semantic"
+            if candidate is None:
+                record.status = "unresolved_method"
+                record.reason = "semantic analysis found no method satisfying the conservative static-method subset"
+            else:
+                source_java_type = types.get(candidate.source_class)
+                target_java_type = types.get(candidate.destination_class)
+                candidate_status, candidate_reason = candidate.status, candidate.reason
+                if source_java_type and target_java_type and source_java_type.module != target_java_type.module:
+                    candidate_status, candidate_reason = "cross_module", "source method and destination class are in different Maven modules"
+                elif (source_java_type and target_java_type and source_java_type.source_set == "main"
+                      and target_java_type.source_set != "main"):
+                    candidate_status, candidate_reason = "test_boundary", "production method cannot move into a test source set"
+                record.status = candidate_status
+                record.reason = candidate_reason
+                record.source_type = candidate.source_class
+                record.destination_type = candidate.destination_class
+                record.source_package = candidate.source_package
+                record.destination_package = candidate.destination_package
+                record.source_member = candidate.source_member
+                record.source_signature = candidate.source_signature
+                record.destination_member = candidate.source_member
+                record.destination_class = candidate.destination_class
+                record.foreign_affinity = candidate.foreign_affinity
+                record.destination_class_affinity = candidate.destination_class_affinity
+                record.source_state_penalty = candidate.source_state_penalty
+                record.structural_score = candidate.structural_score
+                record.candidate_score = candidate.structural_score
+                record.risk_level = candidate.risk_level
+                record.precondition_status = candidate_status
+                if candidate_status == "ready_for_dry_run":
+                    recipe_name = f"generated.architecture.P{index}_MoveMethod_{safe_fragment(candidate.source_member)}"
+                    recipe_file = recipe_dir / f"prediction-{index:04d}-move-method-{safe_fragment(candidate.source_member).lower()}.yml"
+                    recipe_file.write_text(move_method_recipe_yaml(
+                        recipe_name, candidate.source_class, candidate.source_signature,
+                        candidate.destination_class, f"Generated from prediction {index}: {candidate.reason}."
+                    ), encoding="utf-8")
+                    claimed_methods.add((candidate.source_class, candidate.source_signature))
+                    candidate_count += 1
+                    record.recipe_name = recipe_name
+                    record.recipe_file = str(recipe_file.relative_to(output_dir))
         else:
-            ranked, unresolved_reason = rank_move_classes(affected_set, types)
+            semantic_ranked = rank_semantic_move_classes(semantic_methods, affected_set)
+            if semantic_ranked:
+                ranked = [(types[source], destination, score, reason)
+                          for source, destination, score, reason in semantic_ranked if source in types]
+                unresolved_reason = "semantic reciprocal dependencies yielded no unused candidate"
+                move_class_analysis_source = "semantic"
+            else:
+                ranked, unresolved_reason = rank_move_classes(affected_set, types)
+                move_class_analysis_source = "import_fallback"
 
             def eligible(item: tuple[JavaType, str, float, str]) -> bool:
                 source, destination, _, _ = item
@@ -362,10 +461,16 @@ def generate(args: argparse.Namespace) -> None:
                     candidate.module for candidate in types.values()
                     if candidate.package == destination
                 }
+                destination_source_sets = {
+                    candidate.source_set for candidate in types.values()
+                    if candidate.package == destination
+                }
                 destination_type = f"{destination}.{source.simple_name}"
                 return (
                     source.module in destination_modules
-                    and not (source.source_set == "main" and is_test_namespace(destination))
+                    and source.source_set in destination_source_sets
+                    and not (source.source_set == "main" and
+                             (is_test_namespace(destination) or "main" not in destination_source_sets))
                     and destination_type not in types
                 )
 
@@ -384,6 +489,10 @@ def generate(args: argparse.Namespace) -> None:
                 record.destination_package = destination_package
                 record.candidate_score = score
                 record.risk_level = "high_public_api" if source.is_public else "normal"
+                record.refactoring_kind = "Move Class"
+                record.analysis_source = move_class_analysis_source
+                record.structural_score = score
+                record.precondition_status = "ready_for_dry_run"
                 recipe_name = (
                     f"generated.architecture.P{index}_Move_{safe_fragment(source.simple_name)}"
                 )
@@ -453,6 +562,8 @@ def main() -> None:
     parser.add_argument("--elements-column", default="affected_elements")
     parser.add_argument("--suggestions-column", default="suggestions")
     parser.add_argument("--elements-separator", default="|")
+    parser.add_argument("--semantic-analysis", type=Path,
+                        help="OpenRewrite semantic dependency JSON; import analysis remains Move Class fallback")
     parser.add_argument(
         "--severity-categories", default="high,medium,low",
         help="comma-separated categories to process: high,medium,low (default: all)",

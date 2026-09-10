@@ -18,6 +18,7 @@ OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_log4j2.sh"
 OPENREWRITE_GENERATOR="$PROJECT_ROOT/scripts/generate_openrewrite_recipes.sh"
 ARCAN_RUNNER="$PROJECT_ROOT/scripts/run_arcan_smells.sh"
 CANDIDATE_VALIDATOR="$PROJECT_ROOT/evaluation/validate_openrewrite_candidates.py"
+SEMANTIC_ANALYZER="$PROJECT_ROOT/scripts/run_semantic_analysis.sh"
 BASELINE_CSV_DIR="$PROJECT_ROOT/baseline_csv"
 BASE_REPO="$RUN_ROOT/repositories/logging-log4j2"
 REWRITE_REPO="$RUN_ROOT/repositories/logging-log4j2-openrewrite"
@@ -467,6 +468,8 @@ if should_run preflight; then
   require_file "$PROJECT_ROOT/evaluation/validate_baseline_inputs.py"
   require_file "$PROJECT_ROOT/evaluation/capture_provenance.py"
   require_file "$CANDIDATE_VALIDATOR"
+  require_file "$SEMANTIC_ANALYZER"
+  require_file "$PROJECT_ROOT/openrewrite-java/pom.xml"
   require_file "$PROJECT_ROOT/ml/predict_refactorings.py"
     require_file "$PROJECT_ROOT/ml/prepare_training_dataset.py"
     require_file "$PROJECT_ROOT/ml/evaluate_rankings.py"
@@ -818,11 +821,21 @@ if should_run rewrite; then
       -b "experiment/openrewrite-$PROJECT_NAME" "$REWRITE_REPO" "$VERSION_ID"
   fi
 
+  SEMANTIC_OUTPUT="$RESULTS_DIR/semantic-analysis/method-dependencies.json"
+  semantic_arguments=()
+  if "$SEMANTIC_ANALYZER" --repository "$REWRITE_REPO" --output "$SEMANTIC_OUTPUT" \
+      --java-home "$JAVA_HOME_17" 2>&1 | tee "$LOG_DIR/semantic-analysis.log"; then
+    semantic_arguments=(--semantic-analysis "$SEMANTIC_OUTPUT")
+  else
+    echo "WARNING: semantic analysis failed; Move Class import fallback remains available, Move Method will stay unresolved." >&2
+  fi
+
   "$OPENREWRITE_GENERATOR" \
     --repository "$REWRITE_REPO" \
     --predictions "$PREDICTIONS" \
     --output-dir "$RESULTS_DIR/generated-openrewrite" \
-    --severity-categories "$SEVERITY_CATEGORIES"
+    --severity-categories "$SEVERITY_CATEGORIES" \
+    "${semantic_arguments[@]}"
 
   validator_arguments=(
     --repository "$REWRITE_REPO"

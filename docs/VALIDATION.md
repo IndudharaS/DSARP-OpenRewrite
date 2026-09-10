@@ -17,6 +17,14 @@ A candidate is automatically applicable only when all gates pass:
 10. the evidence report confirms the revision, source diff, artifact hashes,
     and whether a causal result may be stated.
 
+Move Method adds semantic gates before this protocol: the resolver must identify
+an exact attributed method and existing destination class, retain affinity and
+source-state components in the manifest, and reject module/source-set and
+signature conflicts. The first executable subset is public static methods.
+They still enter `manual_review` unless risky-candidate execution is explicitly
+enabled; enabling it does not bypass meaningful-diff, formatting, Maven,
+aggregate, or Arcan gates. A vague `Move Method` label never reaches execution.
+
 ## Assigned Logging-Log4j2 revision
 
 Revision: `4f474b32751f4ccad67424ca585612584440cd63`.

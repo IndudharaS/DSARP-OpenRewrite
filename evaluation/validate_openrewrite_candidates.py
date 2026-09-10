@@ -35,11 +35,19 @@ def aggregate(records: list[dict[str, object]]) -> str:
         "recipeList:",
     ]
     for record in records:
-        lines += [
-            "  - org.openrewrite.java.ChangeType:",
-            f"      oldFullyQualifiedTypeName: {record['source_type']}",
-            f"      newFullyQualifiedTypeName: {record['destination_type']}",
-        ]
+        if record.get("refactoring_kind") == "Move Method":
+            lines += [
+                "  - dsarp.rewrite.MoveMethod:",
+                f"      sourceClass: {record['source_type']}",
+                f"      methodPattern: {record['source_signature']}",
+                f"      targetClass: {record['destination_class']}",
+            ]
+        else:
+            lines += [
+                "  - org.openrewrite.java.ChangeType:",
+                f"      oldFullyQualifiedTypeName: {record['source_type']}",
+                f"      newFullyQualifiedTypeName: {record['destination_type']}",
+            ]
     return "\n".join(lines) + "\n"
 
 
@@ -321,7 +329,10 @@ def main() -> None:
     (output / "validation-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     with (output / "validation-report.csv").open("w", newline="", encoding="utf-8") as handle:
         fields = ["prediction_id", "severity", "severity_score", "batch_number",
-                  "source_type", "destination_type", "model_rank", "model_score",
+                  "refactoring_kind", "analysis_source", "source_type", "destination_type",
+                  "source_member", "source_signature", "destination_class",
+                  "foreign_affinity", "destination_class_affinity", "source_state_penalty",
+                  "structural_score", "precondition_status", "model_rank", "model_score",
                   "candidate_score", "risk_level", "validation_status", "failure_category",
                   "validation_reason", "diagnostic_log", "changed_files"]
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")

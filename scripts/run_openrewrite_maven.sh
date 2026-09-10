@@ -9,6 +9,7 @@ RESULTS_DIR=""
 LOG_DIR=""
 MODE="all"
 REWRITE_PLUGIN_VERSION="6.12.0"
+RECIPE_ARTIFACT=()
 
 usage() {
   cat <<'EOF'
@@ -55,11 +56,17 @@ RESULTS_DIR="${RESULTS_DIR:-$REPOSITORY/target/rewrite-results}"
 LOG_DIR="${LOG_DIR:-$REPOSITORY/target/rewrite-logs}"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR"
 
+if grep -q 'dsarp.rewrite.MoveMethod' "$RECIPE"; then
+  "$REPOSITORY/mvnw" -q -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/openrewrite-java/pom.xml" -DskipTests install
+  RECIPE_ARTIFACT=(-Drewrite.recipeArtifactCoordinates=dsarp.rewrite:dsarp-openrewrite-recipes:1.0.0)
+fi
+
 run_rewrite() {
   local goal="$1" log_file="$2"
   (
     cd "$REPOSITORY"
     JAVA_HOME="$JAVA_HOME_VALUE" ./mvnw -DskipTests \
+      "${RECIPE_ARTIFACT[@]}" \
       -Drewrite.configLocation="$RECIPE" \
       -Drewrite.activeRecipes="$ACTIVE_RECIPE" \
       "org.openrewrite.maven:rewrite-maven-plugin:$REWRITE_PLUGIN_VERSION:$goal"

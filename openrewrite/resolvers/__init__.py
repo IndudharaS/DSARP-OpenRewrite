@@ -1,0 +1,2 @@
+"""Concrete refactoring candidate resolvers."""
+

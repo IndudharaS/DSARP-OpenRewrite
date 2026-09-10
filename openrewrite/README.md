@@ -8,7 +8,8 @@ engine, candidate recipes, and validated recipes used by experiments.
 The model CSV contains recommendation labels such as `Move Class`, but
 OpenRewrite needs concrete parameters such as the old and new fully qualified
 type names. `generate_recipes.py` inspects the supplied Java repository and
-attempts to infer those parameters from direct reciprocal package dependencies.
+attempts to infer those parameters from semantic Java evidence. Existing direct
+reciprocal import analysis remains the fallback for Move Class.
 
 It ranks repository-backed candidates and records the evidence, model rank,
 model score, structural score, and risk level for every emitted move.
@@ -67,6 +68,37 @@ Possible statuses are:
 - `unsafe_destination`: a move crosses modules, targets tests, or conflicts with an existing type;
 - `duplicate`: another prediction already selected the same source class;
 - `unresolved`: repository evidence is insufficient for an executable move.
+- `unresolved_method` / `unresolved_destination`: member or destination evidence is insufficient;
+- `unsafe_source_state`: moving the member would preserve excessive source-state coupling;
+- `cross_module`: source and target belong to different Maven modules;
+- `destination_conflict`: the target already declares the method signature;
+- `unsupported_refactoring`: no implemented resolver exists for the labels.
+
+## Automated support and Move Method constraints
+
+| Refactoring | Status |
+|---|---|
+| Move Class | Supported; semantic evidence where available and reciprocal-import fallback |
+| Move Method | Conservative public-static subset supported |
+| Extract Method | Unsupported |
+| Move Attribute | Unsupported |
+| Move+Rename | Unsupported |
+
+Move Method requires an exact source class, resolved signature, and existing
+destination class. The method must be public and static, non-constructor,
+non-abstract, non-native, and non-synchronized. Source and destination must use
+the same Maven module and source set; the destination must not contain the same
+signature; foreign affinity must be at least 0.60; structural score at least
+0.70; there must be no resolved source-state reference; and every non-JDK
+dependency required by the method must belong to the destination package. Because the supported method is
+public, normal validation sends it to manual review unless risky-candidate
+execution is explicitly enabled. That option does not bypass build checks.
+
+`scripts/run_semantic_analysis.sh` runs the non-mutating OpenRewrite
+`DependencyAnalysisRecipe`, exports its DataTable, and writes
+`results/semantic-analysis/method-dependencies.json`. If semantic analysis
+fails, a warning is retained: Move Class may use its import fallback, while
+Move Method remains unresolved.
 
 ## Selection algorithm
 
@@ -86,14 +118,18 @@ measurement are still required after every generated recipe.
 
 ## Model and automation limits
 
-Training uses commit-grouped train/validation/test partitions and bounded
-class-weighted loss, which reduces dominance by the majority refactoring label.
-All input rows still receive five ranked suggestions. The recipe generator can
-currently execute `Move Class` because the repository supplies the missing class
-and destination evidence. Labels such as `Move Method`, `Extract Method`, and
-`Rename Method` need member, statement, signature, or new-name parameters that
-the architecture-smell CSV does not contain; they remain visible in the manifest
-instead of being converted into fabricated recipes.
+Model training is separate from concretization and is unchanged by this work.
+All input rows receive five ranked suggestions. The generator executes
+Move Class and only the explicitly constrained Move Method subset. Extract
+Method remains unsupported because it requires statement-range selection,
+control-flow analysis, parameter and return extraction, and exception-flow
+analysis. Unsupported predictions remain visible instead of becoming recipes.
+
+Run Java recipe tests with Maven 3.9+ and JDK 17:
+
+```bash
+mvn -f openrewrite-java/pom.xml test
+```
 
 More candidates do not imply more correct refactorings. Each candidate is tested
 in isolation and classified as validated, not applicable, compilation failure,

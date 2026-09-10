@@ -13,6 +13,7 @@ RESULTS_DIR=""
 LOG_DIR=""
 MODE="all"
 ACTIVE_RECIPE="masters.project.log4j2.MoveFileSizeToRollingAction"
+RECIPE_ARTIFACT=()
 
 usage() {
   cat <<'EOF'
@@ -67,11 +68,17 @@ RESULTS_DIR="${RESULTS_DIR:-$REPOSITORY/target/rewrite-results}"
 LOG_DIR="${LOG_DIR:-$REPOSITORY/target/rewrite-logs}"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR"
 
+if grep -q 'dsarp.rewrite.MoveMethod' "$RECIPE"; then
+  JAVA_HOME="$JAVA_HOME_17" "$REPOSITORY/mvnw" -q -f "$PROJECT_ROOT/openrewrite-java/pom.xml" -DskipTests install
+  RECIPE_ARTIFACT=(-Drewrite.recipeArtifactCoordinates=dsarp.rewrite:dsarp-openrewrite-recipes:1.0.0)
+fi
+
 run_rewrite() {
   local goal="$1" log_file="$2"
   (
     cd "$REPOSITORY"
     JAVA_HOME="$JAVA_HOME_17" ./mvnw \
+      "${RECIPE_ARTIFACT[@]}" \
       -Prewrite \
       -pl log4j-core,log4j-core-test \
       -am \
