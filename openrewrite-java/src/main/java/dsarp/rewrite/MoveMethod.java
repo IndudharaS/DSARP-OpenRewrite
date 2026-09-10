@@ -86,9 +86,14 @@ public class MoveMethod extends ScanningRecipe<MoveMethod.Accumulator> {
                                 && method.getParameters().size() == acc.method.getParameters().size()) return cd;
                     }
                     List<Statement> statements = new ArrayList<>(cd.getBody().getStatements());
-                    statements.add(acc.method.withPrefix(org.openrewrite.java.tree.Space.format("\n\n")));
-                    J.ClassDeclaration updated = cd.withBody(cd.getBody().withStatements(statements));
-                    return autoFormat(updated, ctx);
+                    String indentation = "    ";
+                    if (!statements.isEmpty()) {
+                        String whitespace = statements.get(statements.size() - 1).getPrefix().getWhitespace();
+                        int lastNewline = whitespace.lastIndexOf('\n');
+                        indentation = lastNewline >= 0 ? whitespace.substring(lastNewline + 1) : whitespace;
+                    }
+                    statements.add(acc.method.withPrefix(org.openrewrite.java.tree.Space.format("\n\n" + indentation)));
+                    return cd.withBody(cd.getBody().withStatements(statements));
                 }
                 return cd;
             }
