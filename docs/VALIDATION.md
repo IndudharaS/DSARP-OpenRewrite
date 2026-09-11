@@ -17,6 +17,18 @@ A candidate is automatically applicable only when all gates pass:
 10. the evidence report confirms the revision, source diff, artifact hashes,
     and whether a causal result may be stated.
 
+Semantic analysis prepares the unchanged target Maven reactor before the
+OpenRewrite dry run. This makes project-local SNAPSHOT dependencies available
+to aggregator modules. Move Class candidates that still depend on a type in
+their original package are rejected before execution; this prevents the
+unresolved-symbol failure previously observed after moving `AppenderWrapper`.
+
+When isolated validation accepts zero candidates, the aggregate worktree is
+unchanged. The pipeline records `results/post-validation-skip.json` and skips
+focused tests, formatting, final full-reactor verification, and the second
+Arcan scan. Those stages cannot add evidence for an unchanged repository and
+previously accounted for hours of unnecessary runtime.
+
 Move Method adds semantic gates before this protocol: the resolver must identify
 an exact attributed method and existing destination class, retain affinity and
 source-state components in the manifest, and reject module/source-set and

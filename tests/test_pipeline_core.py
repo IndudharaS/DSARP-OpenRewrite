@@ -184,6 +184,18 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_stop_stage({"stopStage": "baseline"}, "rewrite")
 
+    def test_semantic_analysis_prepares_target_reactor_before_dry_run(self) -> None:
+        script = (Path(__file__).parents[1] / "scripts" / "run_semantic_analysis.sh").read_text()
+        self.assertLess(script.index('./mvnw -DskipTests install'),
+                        script.index('rewrite-maven-plugin:6.12.0:dryRunNoFork'))
+
+    def test_pipeline_short_circuits_expensive_post_validation_stages(self) -> None:
+        script = (Path(__file__).parents[1] / "scripts" / "run_log4j2_pipeline.sh").read_text()
+        self.assertIn("has_validated_changes()", script)
+        self.assertIn("Skipped: no validated source changes require formatting.", script)
+        self.assertIn("no candidate passed isolated validation", script)
+        self.assertIn('post-validation-skip.json', script)
+
     def test_mining_commit_limit_is_validated(self) -> None:
         self.assertEqual(validate_max_commits({}), 500)
         self.assertEqual(validate_max_commits({"maxCommitsPerRepository": "2000"}), 2000)

@@ -214,6 +214,15 @@ require_command() {
   command -v "$1" >/dev/null || { echo "Required command missing: $1" >&2; exit 1; }
 }
 
+has_validated_changes() {
+  local report="$RESULTS_DIR/openrewrite-validation/validation-report.json"
+  if [[ -f "$report" ]]; then
+    [[ "$(jq -r '.validated_count // 0' "$report")" -gt 0 ]]
+    return
+  fi
+  [[ -d "$REWRITE_REPO" && -n "$(git -C "$REWRITE_REPO" status --porcelain 2>/dev/null)" ]]
+}
+
 run_expected_spring_failure() {
   local repository="$1" log_file="$2" status excludes_file attempt_log retry_log retry_status line
   local dynamic_retry_log dynamic_retry_status failed_test_selectors
@@ -823,9 +832,11 @@ if should_run rewrite; then
 
   SEMANTIC_OUTPUT="$RESULTS_DIR/semantic-analysis/method-dependencies.json"
   semantic_arguments=()
+  semantic_ready=0
   if "$SEMANTIC_ANALYZER" --repository "$REWRITE_REPO" --output "$SEMANTIC_OUTPUT" \
       --java-home "$JAVA_HOME_17" 2>&1 | tee "$LOG_DIR/semantic-analysis.log"; then
     semantic_arguments=(--semantic-analysis "$SEMANTIC_OUTPUT")
+    semantic_ready=1
   else
     echo "WARNING: semantic analysis failed; Move Class import fallback remains available, Move Method will stay unresolved." >&2
   fi
@@ -851,6 +862,10 @@ if should_run rewrite; then
   if ((ALLOW_RISKY_CANDIDATES)); then
     validator_arguments+=(--allow-risky-candidates)
   fi
+  if ((semantic_ready)); then
+    # Semantic analysis already installed the unchanged target reactor.
+    validator_arguments+=(--skip-dependency-preparation)
+  fi
   "$PYTHON" "$CANDIDATE_VALIDATOR" "${validator_arguments[@]}"
 
   validated_count="$(jq -r '.validated_count' "$RESULTS_DIR/openrewrite-validation/validation-report.json")"
@@ -870,7 +885,9 @@ fi
 
 if should_run focused_test; then
   heading "Stage: focused tests"
-  if [[ "$PROFILE" == "log4j2" ]]; then
+  if ! has_validated_changes; then
+    echo "Skipped: no candidate passed isolated validation and the repository is unchanged."
+  elif [[ "$PROFILE" == "log4j2" ]]; then
     (cd "$REWRITE_REPO" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
       -pl log4j-core-test -am \
       -Dtest=org.apache.logging.log4j.core.appender.rolling.FileSizeTest,org.apache.logging.log4j.core.appender.rolling.action.FileSizeTest \
@@ -882,7 +899,9 @@ fi
 
 if should_run format; then
   heading "Stage: format OpenRewrite changes"
-  if [[ "$PROFILE" == "log4j2" ]]; then
+  if ! has_validated_changes; then
+    echo "Skipped: no validated source changes require formatting."
+  elif [[ "$PROFILE" == "log4j2" ]]; then
     (cd "$REWRITE_REPO" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
       -pl log4j-api,log4j-core,log4j-1.2-api -am \
       -DskipTests spotless:apply) | tee "$LOG_DIR/spotless-apply.log"
@@ -892,25 +911,52 @@ if should_run format; then
   else
     echo "Spotless is not configured; formatting stage skipped."
   fi
-  git -C "$REWRITE_REPO" diff --check
+  if has_validated_changes; then
+    git -C "$REWRITE_REPO" diff --check
+  fi
 fi
 
 if should_run final_verify; then
   heading "Stage: final verification"
-  run_expected_spring_failure "$REWRITE_REPO" "$LOG_DIR/refactored-verify.log"
+  if has_validated_changes; then
+    run_expected_spring_failure "$REWRITE_REPO" "$LOG_DIR/refactored-verify.log"
+  else
+    echo "Skipped: no validated source changes require another full Maven build."
+  fi
 fi
 
 if should_run smells; then
   heading "Stage: smell comparison"
-  "$ARCAN_RUNNER" \
-    --repository "$REWRITE_REPO" \
-    --output-dir "$RESULTS_DIR/arcan-refactored" \
-    --java-home "$JAVA_HOME_17" \
-    --arcan-home "$ARCAN_HOME"
-  "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" compare \
-    "$RESULTS_DIR/arcan-baseline-matched/summary.json" \
-    "$RESULTS_DIR/arcan-refactored/summary.json" \
-    --output "$RESULTS_DIR/arcan-comparison.json" >/dev/null
+  if ! has_validated_changes; then
+    echo "Skipped: no validated source changes; a second Arcan run would compare identical bytecode."
+    "$PYTHON" - "$RESULTS_DIR/post-validation-skip.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "reason": "no_validated_source_changes",
+    "focused_tests_skipped": True,
+    "format_skipped": True,
+    "final_verification_skipped": True,
+    "post_refactoring_arcan_skipped": True,
+}, indent=2) + "\n", encoding="utf-8")
+PY
+    # Preserve the normal report contract without rerunning Arcan: an unchanged
+    # worktree has the same compiled architecture as its matched baseline.
+    "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" compare \
+      "$RESULTS_DIR/arcan-baseline-matched/summary.json" \
+      "$RESULTS_DIR/arcan-baseline-matched/summary.json" \
+      --output "$RESULTS_DIR/arcan-comparison.json" >/dev/null
+  else
+    "$ARCAN_RUNNER" \
+      --repository "$REWRITE_REPO" \
+      --output-dir "$RESULTS_DIR/arcan-refactored" \
+      --java-home "$JAVA_HOME_17" \
+      --arcan-home "$ARCAN_HOME"
+    "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" compare \
+      "$RESULTS_DIR/arcan-baseline-matched/summary.json" \
+      "$RESULTS_DIR/arcan-refactored/summary.json" \
+      --output "$RESULTS_DIR/arcan-comparison.json" >/dev/null
+  fi
   jq '.metrics | with_entries(select(.key != "package_cycle_sets"))' \
     "$RESULTS_DIR/arcan-comparison.json" \
     | tee "$RESULTS_DIR/arcan-comparison.txt"

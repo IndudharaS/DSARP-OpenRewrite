@@ -70,6 +70,29 @@ class MoveClassSafetyTests(unittest.TestCase):
             self.assertEqual(len(sources), len(set(sources)))
         finally: temporary.cleanup()
 
+    def test_move_with_original_package_type_dependency_is_rejected(self):
+        temporary, manifest = self.run_generator(
+            "module/src/main/java/example/left/A.java",
+            "module/src/main/java/example/right/B.java",
+            {
+                "module/src/main/java/example/left/A.java":
+                    "package example.left;\nimport example.right.B;\npublic class A { Helper helper; }",
+                "module/src/main/java/example/left/Helper.java":
+                    "package example.left; public class Helper {}",
+                "module/src/main/java/example/right/B.java":
+                    "package example.right;\nimport example.left.A;\npublic class B { Peer peer; }",
+                "module/src/main/java/example/right/Peer.java":
+                    "package example.right; public class Peer {}",
+            },
+        )
+        try:
+            record = manifest["records"][0]
+            self.assertEqual(record["status"], "unsafe_destination")
+            self.assertIn("original-package types", record["reason"])
+            self.assertRegex(record["reason"], r"example\.(left\.Helper|right\.Peer)")
+        finally:
+            temporary.cleanup()
+
     def test_internal_candidates_are_validated_before_public_candidates(self):
         public = {"prediction_id": 1, "severity": "high", "severity_score": 5,
                   "api_impact": "public_class"}

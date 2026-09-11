@@ -78,7 +78,7 @@ Possible statuses are:
 
 | Refactoring | Status |
 |---|---|
-| Move Class | Supported; semantic evidence where available and reciprocal-import fallback |
+| Move Class | Supported only when module/source-set, destination, API and original-package dependency gates pass |
 | Move Method | Conservative public-static subset supported |
 | Extract Method | Unsupported |
 | Move Attribute | Unsupported |
@@ -94,11 +94,19 @@ dependency required by the method must belong to the destination package. Becaus
 public, normal validation sends it to manual review unless risky-candidate
 execution is explicitly enabled. That option does not bypass build checks.
 
-`scripts/run_semantic_analysis.sh` runs the non-mutating OpenRewrite
-`DependencyAnalysisRecipe`, exports its DataTable, and writes
+`scripts/run_semantic_analysis.sh` first installs the unchanged target Maven
+reactor so aggregator modules can resolve project-local SNAPSHOT dependencies.
+It then runs the non-mutating OpenRewrite `DependencyAnalysisRecipe`, exports its DataTable, and writes
 `results/semantic-analysis/method-dependencies.json`. If semantic analysis
 fails, a warning is retained: Move Class may use its import fallback, while
 Move Method remains unresolved.
+
+For Move Class, both semantic dependencies and a conservative source scan are
+used to detect references to types in the source class's original package.
+Such candidates are rejected before OpenRewrite because `ChangeType` does not
+reliably add imports for every formerly same-package field, annotation, class
+header, or method dependency. The import fallback is therefore a candidate
+discovery mechanism, not permission to execute an unsafe move.
 
 ## Selection algorithm
 

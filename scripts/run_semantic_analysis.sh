@@ -18,6 +18,15 @@ done
 [[ -x "$REPOSITORY/mvnw" && -n "$OUTPUT" ]] || { echo "Repository with mvnw and --output are required" >&2; exit 2; }
 export JAVA_HOME="$JAVA_HOME_VALUE"
 "$REPOSITORY/mvnw" -q -f "$PROJECT_ROOT/openrewrite-java/pom.xml" -DskipTests install
+
+# OpenRewrite's aggregator resolves reactor SNAPSHOT dependencies before it
+# visits all modules. Install the unchanged target reactor first so analysis
+# does not fail merely because sibling artifacts are absent from this run's
+# isolated Maven repository.
+(
+  cd "$REPOSITORY"
+  ./mvnw -DskipTests install
+)
 analysis_marker="$(mktemp)"
 trap 'rm -f "$analysis_marker"' EXIT
 (

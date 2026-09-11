@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from openrewrite.candidate_models import JavaMethod
 from openrewrite.resolvers.move_method import resolve_move_method
 from openrewrite.resolvers.move_class import rank_semantic_move_classes
 from openrewrite.semantic_analysis import load_methods
@@ -216,6 +217,43 @@ def is_test_namespace(package: str) -> bool:
     return any(part in {"test", "tests", "testing"} for part in package.split("."))
 
 
+def original_package_dependencies(
+    repository: Path,
+    source: JavaType,
+    types: dict[str, JavaType],
+    semantic_methods: list[JavaMethod],
+) -> tuple[str, ...]:
+    """Find peer types that become inaccessible or unqualified after ChangeType.
+
+    OpenRewrite's ChangeType moves the declaration and its references, but it
+    does not turn every formerly same-package type reference inside that class
+    into an import. Rejecting these candidates is safer than producing Java
+    that only fails much later during the full reactor build.
+    """
+    peers: set[str] = set()
+    for method in semantic_methods:
+        if method.qualified_owner != source.qualified_name:
+            continue
+        for dependency in method.dependencies:
+            if (dependency.target_package == source.package
+                    and dependency.target_type != source.qualified_name
+                    and dependency.target_type in types):
+                peers.add(dependency.target_type)
+
+    # The semantic table is method-oriented and can miss field declarations.
+    # A conservative token scan catches original-package peer types referenced
+    # anywhere in the source, including fields, annotations and class headers.
+    try:
+        text = (repository / source.path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return tuple(sorted(peers))
+    for candidate in types.values():
+        if candidate.package == source.package and candidate.qualified_name != source.qualified_name:
+            if re.search(rf"\b{re.escape(candidate.simple_name)}\b", text):
+                peers.add(candidate.qualified_name)
+    return tuple(sorted(peers))
+
+
 def rank_move_classes(
     affected: set[str], types: dict[str, JavaType]
 ) -> tuple[list[tuple[JavaType, str, float, str]], str]:
@@ -352,6 +390,7 @@ def generate(args: argparse.Namespace) -> None:
     records: list[ManifestRecord] = []
     claimed_sources: dict[str, int] = {}
     claimed_methods: set[tuple[str, str]] = set()
+    move_class_dependency_cache: dict[str, tuple[str, ...]] = {}
     candidate_count = 0
 
     with args.predictions.open(newline="", encoding="utf-8-sig") as handle:
@@ -486,6 +525,10 @@ def generate(args: argparse.Namespace) -> None:
 
             def eligible(item: tuple[JavaType, str, float, str]) -> bool:
                 source, destination, _, _ = item
+                source_dependencies = move_class_dependency_cache.setdefault(
+                    source.qualified_name,
+                    original_package_dependencies(repository, source, types, semantic_methods),
+                )
                 destination_modules = {
                     candidate.module for candidate in types.values()
                     if candidate.package == destination
@@ -501,6 +544,7 @@ def generate(args: argparse.Namespace) -> None:
                     and not (source.source_set == "main" and
                              (is_test_namespace(destination) or "main" not in destination_source_sets))
                     and destination_type not in types
+                    and not source_dependencies
                 )
 
             eligible_ranked = [item for item in ranked if eligible(item)]
@@ -548,7 +592,18 @@ def generate(args: argparse.Namespace) -> None:
                 record.reason = f"all ranked source types already selected by predictions {owners[:8]}"
             elif ranked:
                 record.status = "unsafe_destination"
-                record.reason = "ranked moves were cross-module, production-to-test, or destination conflicts"
+                unsafe_dependencies = sorted({
+                    dependency
+                    for source, _, _, _ in ranked
+                    for dependency in move_class_dependency_cache.get(source.qualified_name, ())
+                })
+                if unsafe_dependencies:
+                    record.reason = (
+                        "moving the class would leave unresolved references to original-package types: "
+                        + ", ".join(unsafe_dependencies[:8])
+                    )
+                else:
+                    record.reason = "ranked moves were cross-module, production-to-test, or destination conflicts"
 
         records.append(record)
 
