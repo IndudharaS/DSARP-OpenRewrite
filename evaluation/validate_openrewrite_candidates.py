@@ -110,6 +110,36 @@ def has_compatibility_strategy(record: dict[str, object], profile: str) -> bool:
     )
 
 
+def api_impact(record: dict[str, object]) -> str:
+    """Return an API-impact category, including compatibility with old manifests."""
+    explicit = str(record.get("api_impact") or "")
+    if explicit:
+        return explicit
+    if record.get("risk_level") == "high_public_api":
+        return "public_method" if record.get("refactoring_kind") == "Move Method" else "public_class"
+    if record.get("risk_level") == "normal":
+        return "internal_only"
+    return "unknown_api"
+
+
+def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int]:
+    """Prioritize safer API changes before public or semantically unknown changes."""
+    impact_order = {
+        "internal_only": 0,
+        "protected_api": 1,
+        "public_method": 2,
+        "public_class": 3,
+        "unknown_api": 4,
+    }
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    return (
+        impact_order.get(api_impact(record), 4),
+        severity_order.get(str(record.get("severity")), 3),
+        -int(record.get("severity_score") or 0),
+        int(record["prediction_id"]),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True, type=Path)
@@ -142,12 +172,21 @@ def main() -> None:
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     manifest = json.loads((generated / "manifest.json").read_text(encoding="utf-8"))
-    severity_order = {"high": 0, "medium": 1, "low": 2}
     candidates = sorted(
         (row for row in manifest["records"] if row["status"] == "ready_for_dry_run"),
-        key=lambda row: (severity_order.get(str(row.get("severity")), 3),
-                         -int(row.get("severity_score") or 0), int(row["prediction_id"])),
+        key=candidate_priority,
     )
+    for row in candidates:
+        row["api_impact"] = api_impact(row)
+        if not row.get("compatibility_strategy"):
+            row["compatibility_strategy"] = (
+                "required" if row["api_impact"] in {"protected_api", "public_method", "public_class"}
+                else "not_required" if row["api_impact"] == "internal_only" else "unknown"
+            )
+        row["automatic_execution_allowed"] = (
+            row["api_impact"] == "internal_only"
+            or has_compatibility_strategy(row, args.compatibility_profile)
+        )
     results, validated = [], []
     worktrees = output / "worktrees"
     worktrees.mkdir(exist_ok=True)
@@ -322,6 +361,10 @@ def main() -> None:
         "failed_count": status_counts.get("failed", 0),
         "not_applicable_count": status_counts.get("not_applicable", 0),
         "manual_review_count": status_counts.get("manual_review", 0),
+        "api_impact_counts": dict(sorted(
+            (impact, sum(1 for row in candidates if row["api_impact"] == impact))
+            for impact in {str(row["api_impact"]) for row in candidates}
+        )),
         "status_counts": status_counts,
         "failure_category_counts": category_counts,
         "records": results,
@@ -334,6 +377,8 @@ def main() -> None:
                   "foreign_affinity", "destination_class_affinity", "source_state_penalty",
                   "structural_score", "precondition_status", "model_rank", "model_score",
                   "candidate_score", "risk_level", "validation_status", "failure_category",
+                  "api_impact", "public_types_affected", "public_members_affected",
+                  "compatibility_strategy", "automatic_execution_allowed",
                   "validation_reason", "diagnostic_log", "changed_files"]
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader(); writer.writerows(results)

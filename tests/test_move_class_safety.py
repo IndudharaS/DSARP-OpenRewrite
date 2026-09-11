@@ -10,6 +10,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from openrewrite.generate_recipes import generate
+from evaluation.validate_openrewrite_candidates import candidate_priority
 
 
 class MoveClassSafetyTests(unittest.TestCase):
@@ -68,6 +69,26 @@ class MoveClassSafetyTests(unittest.TestCase):
             sources = [row["source_type"] for row in manifest["records"] if row["status"] == "ready_for_dry_run"]
             self.assertEqual(len(sources), len(set(sources)))
         finally: temporary.cleanup()
+
+    def test_internal_candidates_are_validated_before_public_candidates(self):
+        public = {"prediction_id": 1, "severity": "high", "severity_score": 5,
+                  "api_impact": "public_class"}
+        internal = {"prediction_id": 2, "severity": "medium", "severity_score": 3,
+                    "api_impact": "internal_only"}
+        self.assertEqual(sorted([public, internal], key=candidate_priority)[0], internal)
+
+    def test_manifest_classifies_public_move_class_api_impact(self):
+        temporary, manifest = self.run_generator(
+            "module/src/main/java/example/left/A.java",
+            "module/src/main/java/example/right/B.java",
+        )
+        try:
+            record = manifest["records"][0]
+            self.assertEqual(record["api_impact"], "public_class")
+            self.assertEqual(record["compatibility_strategy"], "required")
+            self.assertFalse(record["automatic_execution_allowed"])
+        finally:
+            temporary.cleanup()
 
 
 if __name__ == "__main__": unittest.main()

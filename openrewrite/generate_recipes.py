@@ -81,6 +81,30 @@ class ManifestRecord:
     source_state_penalty: float | None = None
     structural_score: float | None = None
     precondition_status: str | None = None
+    api_impact: str = "unknown_api"
+    public_types_affected: list[str] | None = None
+    public_members_affected: list[str] | None = None
+    compatibility_strategy: str = "unknown"
+    automatic_execution_allowed: bool = False
+
+
+def set_api_impact(record: ManifestRecord, *, public: bool, member_level: bool) -> None:
+    """Record API risk separately from architectural-smell severity."""
+    if public:
+        record.api_impact = "public_method" if member_level else "public_class"
+        record.public_types_affected = [record.source_type] if record.source_type else []
+        record.public_members_affected = (
+            [f"{record.source_type}#{record.source_signature}"]
+            if member_level and record.source_type and record.source_signature else []
+        )
+        record.compatibility_strategy = "required"
+        record.automatic_execution_allowed = False
+    else:
+        record.api_impact = "internal_only"
+        record.public_types_affected = []
+        record.public_members_affected = []
+        record.compatibility_strategy = "not_required"
+        record.automatic_execution_allowed = True
 
 
 def classify_severity(smell: str, affected_count: int) -> tuple[str, int, str]:
@@ -433,6 +457,11 @@ def generate(args: argparse.Namespace) -> None:
                 record.candidate_score = candidate.structural_score
                 record.risk_level = candidate.risk_level
                 record.precondition_status = candidate_status
+                set_api_impact(
+                    record,
+                    public=candidate.risk_level == "high_public_api",
+                    member_level=True,
+                )
                 if candidate_status == "ready_for_dry_run":
                     recipe_name = f"generated.architecture.P{index}_MoveMethod_{safe_fragment(candidate.source_member)}"
                     recipe_file = recipe_dir / f"prediction-{index:04d}-move-method-{safe_fragment(candidate.source_member).lower()}.yml"
@@ -493,6 +522,7 @@ def generate(args: argparse.Namespace) -> None:
                 record.analysis_source = move_class_analysis_source
                 record.structural_score = score
                 record.precondition_status = "ready_for_dry_run"
+                set_api_impact(record, public=source.is_public, member_level=False)
                 recipe_name = (
                     f"generated.architecture.P{index}_Move_{safe_fragment(source.simple_name)}"
                 )
