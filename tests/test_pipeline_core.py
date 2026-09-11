@@ -196,6 +196,15 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("no candidate passed isolated validation", script)
         self.assertIn('post-validation-skip.json', script)
 
+    def test_pipeline_only_accepts_exact_persistent_log4j_cron_flake(self) -> None:
+        script = (Path(__file__).parents[1] / "scripts" / "run_log4j2_pipeline.sh").read_text()
+        self.assertIn(
+            "RollingAppenderDirectCronTest#testAppender", script)
+        self.assertIn(
+            "Expecting actual not to be empty within 2 seconds", script)
+        self.assertIn(
+            "Rollover completion verification failure", script)
+
     def test_mining_commit_limit_is_validated(self) -> None:
         self.assertEqual(validate_max_commits({}), 500)
         self.assertEqual(validate_max_commits({"maxCommitsPerRepository": "2000"}), 2000)

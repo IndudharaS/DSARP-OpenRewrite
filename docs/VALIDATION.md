@@ -29,6 +29,14 @@ focused tests, formatting, final full-reactor verification, and the second
 Arcan scan. Those stages cannot add evidence for an unchanged repository and
 previously accounted for hours of unnecessary runtime.
 
+Log4j2's `RollingAppenderDirectCronTest` requires a newly rolled file to become
+non-empty within two seconds. The HPC parallel filesystem can miss that
+visibility deadline although the rollover completes. A baseline/final reactor
+is accepted only when this is the sole failed test, its isolated retry produces
+the same rollover/timeout signature, and no compilation or unrelated test
+failure is present. The exception is intentionally narrower than accepting a
+generic Maven test failure.
+
 Move Method adds semantic gates before this protocol: the resolver must identify
 an exact attributed method and existing destination class, retain affinity and
 source-state components in the manifest, and reject module/source-set and
