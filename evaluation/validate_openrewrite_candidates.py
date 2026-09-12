@@ -79,9 +79,25 @@ def source_changes(repository: Path) -> list[str]:
         value = line[3:].strip()
         if " -> " in value:
             value = value.split(" -> ", 1)[1]
-        if value.endswith(relevant_suffixes) or Path(value).name in {"pom.xml", "module-info.java"}:
+        if (value.endswith(relevant_suffixes)
+                or Path(value).name in {"pom.xml", "module-info.java"}
+                or "/src/main/resources/" in f"/{value}"
+                or "/src/test/resources/" in f"/{value}"):
             changed.append(value)
     return sorted(set(changed))
+
+
+def changed_test_selectors(changed_files: list[str]) -> list[str]:
+    """Convert changed Java test paths into Maven Surefire class selectors."""
+    selectors: list[str] = []
+    marker = "/src/test/java/"
+    for value in changed_files:
+        normalized = f"/{value.replace(os.sep, '/')}"
+        if marker not in normalized or not normalized.endswith(".java"):
+            continue
+        class_path = normalized.split(marker, 1)[1][:-5]
+        selectors.append(class_path.replace("/", "."))
+    return list(dict.fromkeys(selectors))
 
 
 def classify_failure(log: Path, fallback: str) -> tuple[str, str]:
@@ -262,6 +278,7 @@ def main() -> None:
             compatibility_status = 0
             format_status = 1
             verify_status = 1
+            test_status = 1
             changed_files = source_changes(worktree) if rewrite == 0 else []
             changed = bool(changed_files)
             if changed:
@@ -294,11 +311,21 @@ def main() -> None:
                         ["./mvnw", "-DskipTests", "verify"],
                         cwd=worktree, log=log_dir / "verify.log", env=environment,
                     )
+                selectors = changed_test_selectors(changed_files)
+                if verify_status == 0 and selectors:
+                    test_status = run(
+                        ["./mvnw", f"-Dtest={','.join(selectors)}",
+                         "-Dsurefire.failIfNoSpecifiedTests=false", "-DforkCount=1", "test"],
+                        cwd=worktree, log=log_dir / "affected-tests.log", env=environment,
+                    )
+                elif verify_status == 0:
+                    test_status = 0
 
-            if rewrite == 0 and changed and compatibility_status == 0 and format_status == 0 and verify_status == 0:
-                status, reason = "validated", "OpenRewrite application, formatting, and Maven verification passed"
+            if (rewrite == 0 and changed and compatibility_status == 0 and format_status == 0
+                    and verify_status == 0 and test_status == 0):
+                status, reason = "validated", "OpenRewrite application, formatting, Maven verification, and affected tests passed"
                 category = "validated"
-                diagnostic_log = log_dir / "verify.log"
+                diagnostic_log = log_dir / ("affected-tests.log" if changed_test_selectors(changed_files) else "verify.log")
                 validated.append(record)
             elif rewrite != 0:
                 diagnostic_log = log_dir / "runner-console.log"
@@ -312,6 +339,9 @@ def main() -> None:
             elif format_status != 0:
                 diagnostic_log = log_dir / "spotless.log"
                 category, reason = classify_failure(diagnostic_log, "post-rewrite formatting failed")
+            elif verify_status == 0 and test_status != 0:
+                diagnostic_log = log_dir / "affected-tests.log"
+                category, reason = classify_failure(diagnostic_log, "affected post-rewrite tests failed")
             else:
                 diagnostic_log = log_dir / "verify.log"
                 category, reason = classify_failure(diagnostic_log, "post-rewrite Maven verification failed")

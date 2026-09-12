@@ -12,7 +12,9 @@ from pathlib import Path
 from unittest import mock
 
 from evaluation.summarize_arcan import comparison, cycles
-from evaluation.validate_openrewrite_candidates import classify_failure, has_compatibility_strategy
+from evaluation.validate_openrewrite_candidates import (changed_test_selectors,
+                                                         classify_failure,
+                                                         has_compatibility_strategy)
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
                           result_summary,
@@ -68,6 +70,12 @@ class SuggestionTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_changed_java_tests_become_surefire_selectors(self) -> None:
+        self.assertEqual(changed_test_selectors([
+            "module/src/test/java/example/ServiceLoaderTest.java",
+            "module/src/main/java/example/Service.java",
+        ]), ["example.ServiceLoaderTest"])
+
     def test_run_summary_never_displays_an_external_prediction_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

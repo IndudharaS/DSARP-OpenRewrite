@@ -254,6 +254,33 @@ def original_package_dependencies(
     return tuple(sorted(peers))
 
 
+def external_type_metadata_references(repository: Path, source: JavaType) -> tuple[str, ...]:
+    """Find non-Java metadata that OpenRewrite ChangeType cannot safely migrate."""
+    references: set[str] = set()
+    for path in repository.rglob("*"):
+        if not path.is_file() or path.suffix == ".java":
+            continue
+        relative = path.relative_to(repository)
+        if any(part in EXCLUDED_PARTS for part in relative.parts):
+            continue
+        # ServiceLoader registrations commonly encode the service type in the
+        # filename and provider names in the file body.
+        if source.qualified_name in str(relative):
+            references.add(str(relative))
+            continue
+        try:
+            if path.stat().st_size > 2_000_000:
+                continue
+            data = path.read_bytes()
+        except OSError:
+            continue
+        if b"\0" in data:
+            continue
+        if source.qualified_name.encode() in data:
+            references.add(str(relative))
+    return tuple(sorted(references))
+
+
 def rank_move_classes(
     affected: set[str], types: dict[str, JavaType]
 ) -> tuple[list[tuple[JavaType, str, float, str]], str]:
@@ -391,6 +418,7 @@ def generate(args: argparse.Namespace) -> None:
     claimed_sources: dict[str, int] = {}
     claimed_methods: set[tuple[str, str]] = set()
     move_class_dependency_cache: dict[str, tuple[str, ...]] = {}
+    move_class_metadata_cache: dict[str, tuple[str, ...]] = {}
     candidate_count = 0
 
     with args.predictions.open(newline="", encoding="utf-8-sig") as handle:
@@ -529,6 +557,10 @@ def generate(args: argparse.Namespace) -> None:
                     source.qualified_name,
                     original_package_dependencies(repository, source, types, semantic_methods),
                 )
+                metadata_references = move_class_metadata_cache.setdefault(
+                    source.qualified_name,
+                    external_type_metadata_references(repository, source),
+                )
                 destination_modules = {
                     candidate.module for candidate in types.values()
                     if candidate.package == destination
@@ -545,6 +577,7 @@ def generate(args: argparse.Namespace) -> None:
                              (is_test_namespace(destination) or "main" not in destination_source_sets))
                     and destination_type not in types
                     and not source_dependencies
+                    and not metadata_references
                 )
 
             eligible_ranked = [item for item in ranked if eligible(item)]
@@ -601,6 +634,16 @@ def generate(args: argparse.Namespace) -> None:
                     record.reason = (
                         "moving the class would leave unresolved references to original-package types: "
                         + ", ".join(unsafe_dependencies[:8])
+                    )
+                elif unsafe_metadata := sorted({
+                    reference
+                    for source, _, _, _ in ranked
+                    for reference in move_class_metadata_cache.get(source.qualified_name, ())
+                }):
+                    record.status = "unsafe_metadata_reference"
+                    record.reason = (
+                        "moving the class would leave stale non-Java type metadata: "
+                        + ", ".join(unsafe_metadata[:8])
                     )
                 else:
                     record.reason = "ranked moves were cross-module, production-to-test, or destination conflicts"

@@ -93,6 +93,24 @@ class MoveClassSafetyTests(unittest.TestCase):
         finally:
             temporary.cleanup()
 
+    def test_move_referenced_by_service_metadata_is_rejected(self):
+        temporary, manifest = self.run_generator(
+            "module/src/main/java/example/left/A.java",
+            "module/src/main/java/example/right/B.java",
+            {
+                "module/src/test/resources/META-INF/services/example.left.A":
+                    "example.left.AProvider\n",
+                "module/src/test/resources/META-INF/services/example.right.B":
+                    "example.right.BProvider\n",
+            },
+        )
+        try:
+            record = manifest["records"][0]
+            self.assertEqual(record["status"], "unsafe_metadata_reference")
+            self.assertIn("META-INF/services/example.", record["reason"])
+        finally:
+            temporary.cleanup()
+
     def test_internal_candidates_are_validated_before_public_candidates(self):
         public = {"prediction_id": 1, "severity": "high", "severity_score": 5,
                   "api_impact": "public_class"}

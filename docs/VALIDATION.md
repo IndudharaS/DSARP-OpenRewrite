@@ -22,6 +22,12 @@ OpenRewrite dry run. This makes project-local SNAPSHOT dependencies available
 to aggregator modules. Move Class candidates that still depend on a type in
 their original package are rejected before execution; this prevents the
 unresolved-symbol failure previously observed after moving `AppenderWrapper`.
+Move Class is also rejected when its fully qualified type name appears in
+non-Java metadata or a resource path such as `META-INF/services`. `ChangeType`
+updates Java references but cannot safely migrate all service registrations,
+reflection configuration, or resource contracts. Isolated validation now runs
+directly affected Java tests after compilation, catching behavioural failures
+such as a ServiceLoader returning no providers before aggregation.
 
 When isolated validation accepts zero candidates, the aggregate worktree is
 unchanged. The pipeline records `results/post-validation-skip.json` and skips
