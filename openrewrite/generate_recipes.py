@@ -108,6 +108,42 @@ def set_api_impact(record: ManifestRecord, *, public: bool, member_level: bool) 
         record.automatic_execution_allowed = True
 
 
+def has_builtin_move_class_compatibility(source: JavaType, destination_type: str) -> bool:
+    return (
+        source.qualified_name
+        == "org.apache.logging.log4j.core.appender.rolling.FileSize"
+        and destination_type
+        == "org.apache.logging.log4j.core.appender.rolling.action.FileSize"
+    )
+
+
+def move_class_preference(source: JavaType, destination_type: str) -> int:
+    """Prefer internal code, then test utilities, then supported public APIs."""
+    if not source.is_public:
+        return 0
+    if source.source_set == "test":
+        return 1
+    if has_builtin_move_class_compatibility(source, destination_type):
+        return 2
+    return 3
+
+
+def set_move_class_api_impact(
+    record: ManifestRecord, source: JavaType, destination_type: str
+) -> None:
+    if source.source_set == "test":
+        record.api_impact = "test_only"
+        record.public_types_affected = []
+        record.public_members_affected = []
+        record.compatibility_strategy = "not_required"
+        record.automatic_execution_allowed = True
+    else:
+        set_api_impact(record, public=source.is_public, member_level=False)
+        if has_builtin_move_class_compatibility(source, destination_type):
+            record.compatibility_strategy = "file_size_facade"
+            record.automatic_execution_allowed = True
+
+
 def classify_severity(smell: str, affected_count: int) -> tuple[str, int, str]:
     """Prioritize smells using transparent architecture-level evidence."""
     normalized = smell.lower()
@@ -560,7 +596,14 @@ def generate(args: argparse.Namespace) -> None:
                 ranked, unresolved_reason = rank_move_classes(affected_set, types)
                 move_class_analysis_source = "import_fallback"
 
-            def eligible(item: tuple[JavaType, str, float, str]) -> bool:
+            ranked = sorted(
+                ranked,
+                key=lambda item: move_class_preference(
+                    item[0], f"{item[1]}.{item[0].simple_name}"
+                ),
+            )
+
+            def structurally_eligible(item: tuple[JavaType, str, float, str]) -> bool:
                 nonlocal metadata_corpus
                 source, destination, _, _ = item
                 if source.qualified_name not in move_class_dependency_cache:
@@ -592,9 +635,15 @@ def generate(args: argparse.Namespace) -> None:
                     and not metadata_references
                 )
 
-            eligible_ranked = [item for item in ranked if eligible(item)]
+            eligible_ranked = [item for item in ranked if structurally_eligible(item)]
+            safe_ranked = [
+                item for item in eligible_ranked
+                if move_class_preference(
+                    item[0], f"{item[1]}.{item[0].simple_name}"
+                ) < 3
+            ]
             selected = next(
-                (item for item in eligible_ranked if item[0].qualified_name not in claimed_sources),
+                (item for item in safe_ranked if item[0].qualified_name not in claimed_sources),
                 None,
             )
             record.reason = unresolved_reason
@@ -606,12 +655,15 @@ def generate(args: argparse.Namespace) -> None:
                 record.source_package = source.package
                 record.destination_package = destination_package
                 record.candidate_score = score
-                record.risk_level = "high_public_api" if source.is_public else "normal"
+                record.risk_level = (
+                    "test_only" if source.source_set == "test"
+                    else "high_public_api" if source.is_public else "normal"
+                )
                 record.refactoring_kind = "Move Class"
                 record.analysis_source = move_class_analysis_source
                 record.structural_score = score
                 record.precondition_status = "ready_for_dry_run"
-                set_api_impact(record, public=source.is_public, member_level=False)
+                set_move_class_api_impact(record, source, destination_type)
                 recipe_name = (
                     f"generated.architecture.P{index}_Move_{safe_fragment(source.simple_name)}"
                 )
@@ -631,10 +683,10 @@ def generate(args: argparse.Namespace) -> None:
                 record.reason = reason
                 record.recipe_name = recipe_name
                 record.recipe_file = str(recipe_file.relative_to(output_dir))
-            elif eligible_ranked:
-                owners = sorted({claimed_sources[item[0].qualified_name] for item in eligible_ranked})
+            elif safe_ranked:
+                owners = sorted({claimed_sources[item[0].qualified_name] for item in safe_ranked})
                 record.status = "duplicate"
-                record.reason = f"all ranked source types already selected by predictions {owners[:8]}"
+                record.reason = f"all safe ranked source types already selected by predictions {owners[:8]}"
             elif ranked:
                 record.status = "unsafe_destination"
                 unsafe_dependencies = sorted({
@@ -642,7 +694,25 @@ def generate(args: argparse.Namespace) -> None:
                     for source, _, _, _ in ranked
                     for dependency in move_class_dependency_cache.get(source.qualified_name, ())
                 })
-                if unsafe_dependencies:
+                if eligible_ranked:
+                    blocked = eligible_ranked[0]
+                    source, destination_package, score, _ = blocked
+                    destination_type = f"{destination_package}.{source.simple_name}"
+                    record.source_type = source.qualified_name
+                    record.destination_type = destination_type
+                    record.source_package = source.package
+                    record.destination_package = destination_package
+                    record.candidate_score = score
+                    record.refactoring_kind = "Move Class"
+                    record.analysis_source = move_class_analysis_source
+                    record.precondition_status = "unsafe_public_api"
+                    set_move_class_api_impact(record, source, destination_type)
+                    record.status = "unsafe_public_api"
+                    record.reason = (
+                        "no safe internal candidate; moving this public production class "
+                        "requires an implemented compatibility strategy"
+                    )
+                elif unsafe_dependencies:
                     record.reason = (
                         "moving the class would leave unresolved references to original-package types: "
                         + ", ".join(unsafe_dependencies[:8])

@@ -45,7 +45,7 @@ class SuggestionTests(unittest.TestCase):
             ):
                 path = repository / "module" / "src" / "main" / "java" / Path(*package.split(".")) / f"{name}.java"
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(f"package {package};\nimport {imported};\npublic class {name} {{}}\n")
+                path.write_text(f"package {package};\nimport {imported};\nclass {name} {{}}\n")
             predictions = root / "predictions.csv"
             with predictions.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=["architecture_smell", "affected_elements", "suggestions"])

@@ -145,6 +145,38 @@ class MoveClassSafetyTests(unittest.TestCase):
             self.assertEqual(record["api_impact"], "public_class")
             self.assertEqual(record["compatibility_strategy"], "required")
             self.assertFalse(record["automatic_execution_allowed"])
+            self.assertEqual(record["status"], "unsafe_public_api")
+            self.assertIn("no safe internal candidate", record["reason"])
+        finally:
+            temporary.cleanup()
+
+    def test_public_test_source_is_classified_separately_from_production_api(self):
+        temporary, manifest = self.run_generator(
+            "module/src/test/java/example/left/A.java",
+            "module/src/test/java/example/right/B.java",
+        )
+        try:
+            record = manifest["records"][0]
+            self.assertEqual(record["status"], "ready_for_dry_run")
+            self.assertEqual(record["api_impact"], "test_only")
+            self.assertTrue(record["automatic_execution_allowed"])
+        finally:
+            temporary.cleanup()
+
+    def test_internal_source_is_selected_ahead_of_public_ranked_source(self):
+        temporary, manifest = self.run_generator(
+            "module/src/main/java/example/left/A.java",
+            "module/src/main/java/example/right/B.java",
+            {
+                "module/src/main/java/example/right/B.java":
+                    "package example.right;\nimport example.left.A;\nclass B {}",
+            },
+        )
+        try:
+            record = manifest["records"][0]
+            self.assertEqual(record["status"], "ready_for_dry_run")
+            self.assertEqual(record["source_type"], "example.right.B")
+            self.assertEqual(record["api_impact"], "internal_only")
         finally:
             temporary.cleanup()
 

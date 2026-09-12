@@ -108,6 +108,14 @@ reliably add imports for every formerly same-package field, annotation, class
 header, or method dependency. The import fallback is therefore a candidate
 discovery mechanism, not permission to execute an unsafe move.
 
+Move Class selection orders structurally valid alternatives by automation
+safety: package-private/internal classes first, test-source utilities second,
+public classes with an implemented compatibility strategy third, and unsupported
+public production APIs last. The last category produces
+`unsafe_public_api: no safe internal candidate` instead of an executable recipe.
+This ordering applies to the entire semantic/import ranking, so an unsafe first
+choice does not prevent a lower-ranked internal candidate from being selected.
+
 ## Selection algorithm
 
 For each prediction, the generator:

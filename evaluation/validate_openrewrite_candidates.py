@@ -142,14 +142,15 @@ def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int]:
     """Prioritize safer API changes before public or semantically unknown changes."""
     impact_order = {
         "internal_only": 0,
-        "protected_api": 1,
-        "public_method": 2,
-        "public_class": 3,
-        "unknown_api": 4,
+        "test_only": 1,
+        "protected_api": 2,
+        "public_method": 3,
+        "public_class": 4,
+        "unknown_api": 5,
     }
     severity_order = {"high": 0, "medium": 1, "low": 2}
     return (
-        impact_order.get(api_impact(record), 4),
+        impact_order.get(api_impact(record), 5),
         severity_order.get(str(record.get("severity")), 3),
         -int(record.get("severity_score") or 0),
         int(record["prediction_id"]),

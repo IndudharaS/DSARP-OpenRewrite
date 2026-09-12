@@ -30,6 +30,13 @@ directly affected Java tests after compilation, catching behavioural failures
 such as a ServiceLoader returning no providers before aggregation.
 The non-Java metadata corpus is read once per generation run and reused for all
 candidates; repository files are not rescanned for every prediction.
+Public production classes are not emitted for expensive validation unless the
+move has an implemented compatibility strategy. Public types under a test
+source set are recorded as `test_only`, while package-private types are
+`internal_only`; the latter are preferred across the complete ranked candidate
+list. If only unsupported public production types remain, the manifest records
+`unsafe_public_api` and `no safe internal candidate` rather than creating a
+recipe that is expected to fail API verification.
 
 When isolated validation accepts zero candidates, the aggregate worktree is
 unchanged. The pipeline records `results/post-validation-skip.json` and skips
