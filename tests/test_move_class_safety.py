@@ -8,7 +8,9 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
+import openrewrite.generate_recipes as recipe_generator
 from openrewrite.generate_recipes import generate
 from evaluation.validate_openrewrite_candidates import candidate_priority
 
@@ -108,6 +110,21 @@ class MoveClassSafetyTests(unittest.TestCase):
             record = manifest["records"][0]
             self.assertEqual(record["status"], "unsafe_metadata_reference")
             self.assertIn("META-INF/services/example.", record["reason"])
+        finally:
+            temporary.cleanup()
+
+    def test_metadata_files_are_loaded_once_for_all_predictions(self):
+        original = recipe_generator.external_metadata_corpus
+        with mock.patch.object(
+            recipe_generator, "external_metadata_corpus", wraps=original
+        ) as corpus:
+            temporary, _ = self.run_generator(
+                "module/src/main/java/example/left/A.java",
+                "module/src/main/java/example/right/B.java",
+                prediction_count=20,
+            )
+        try:
+            self.assertEqual(corpus.call_count, 1)
         finally:
             temporary.cleanup()
 

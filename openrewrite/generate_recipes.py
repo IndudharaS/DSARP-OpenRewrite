@@ -254,19 +254,14 @@ def original_package_dependencies(
     return tuple(sorted(peers))
 
 
-def external_type_metadata_references(repository: Path, source: JavaType) -> tuple[str, ...]:
-    """Find non-Java metadata that OpenRewrite ChangeType cannot safely migrate."""
-    references: set[str] = set()
+def external_metadata_corpus(repository: Path) -> list[tuple[str, bytes]]:
+    """Read eligible non-Java metadata once for all Move Class candidates."""
+    corpus: list[tuple[str, bytes]] = []
     for path in repository.rglob("*"):
         if not path.is_file() or path.suffix == ".java":
             continue
         relative = path.relative_to(repository)
         if any(part in EXCLUDED_PARTS for part in relative.parts):
-            continue
-        # ServiceLoader registrations commonly encode the service type in the
-        # filename and provider names in the file body.
-        if source.qualified_name in str(relative):
-            references.add(str(relative))
             continue
         try:
             if path.stat().st_size > 2_000_000:
@@ -276,8 +271,21 @@ def external_type_metadata_references(repository: Path, source: JavaType) -> tup
             continue
         if b"\0" in data:
             continue
-        if source.qualified_name.encode() in data:
-            references.add(str(relative))
+        corpus.append((str(relative), data))
+    return corpus
+
+
+def external_type_metadata_references(
+    corpus: list[tuple[str, bytes]], source: JavaType
+) -> tuple[str, ...]:
+    """Find non-Java metadata that OpenRewrite ChangeType cannot safely migrate."""
+    references: set[str] = set()
+    encoded_name = source.qualified_name.encode()
+    for relative, data in corpus:
+        # ServiceLoader registrations commonly encode the service type in the
+        # filename and provider names in the file body.
+        if source.qualified_name in relative or encoded_name in data:
+            references.add(relative)
     return tuple(sorted(references))
 
 
@@ -419,6 +427,7 @@ def generate(args: argparse.Namespace) -> None:
     claimed_methods: set[tuple[str, str]] = set()
     move_class_dependency_cache: dict[str, tuple[str, ...]] = {}
     move_class_metadata_cache: dict[str, tuple[str, ...]] = {}
+    metadata_corpus: list[tuple[str, bytes]] | None = None
     candidate_count = 0
 
     with args.predictions.open(newline="", encoding="utf-8-sig") as handle:
@@ -552,15 +561,18 @@ def generate(args: argparse.Namespace) -> None:
                 move_class_analysis_source = "import_fallback"
 
             def eligible(item: tuple[JavaType, str, float, str]) -> bool:
+                nonlocal metadata_corpus
                 source, destination, _, _ = item
-                source_dependencies = move_class_dependency_cache.setdefault(
-                    source.qualified_name,
-                    original_package_dependencies(repository, source, types, semantic_methods),
-                )
-                metadata_references = move_class_metadata_cache.setdefault(
-                    source.qualified_name,
-                    external_type_metadata_references(repository, source),
-                )
+                if source.qualified_name not in move_class_dependency_cache:
+                    move_class_dependency_cache[source.qualified_name] = original_package_dependencies(
+                        repository, source, types, semantic_methods)
+                source_dependencies = move_class_dependency_cache[source.qualified_name]
+                if metadata_corpus is None:
+                    metadata_corpus = external_metadata_corpus(repository)
+                if source.qualified_name not in move_class_metadata_cache:
+                    move_class_metadata_cache[source.qualified_name] = external_type_metadata_references(
+                        metadata_corpus, source)
+                metadata_references = move_class_metadata_cache[source.qualified_name]
                 destination_modules = {
                     candidate.module for candidate in types.values()
                     if candidate.package == destination

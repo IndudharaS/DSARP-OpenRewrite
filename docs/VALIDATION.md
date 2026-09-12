@@ -28,6 +28,8 @@ updates Java references but cannot safely migrate all service registrations,
 reflection configuration, or resource contracts. Isolated validation now runs
 directly affected Java tests after compilation, catching behavioural failures
 such as a ServiceLoader returning no providers before aggregation.
+The non-Java metadata corpus is read once per generation run and reused for all
+candidates; repository files are not rescanned for every prediction.
 
 When isolated validation accepts zero candidates, the aggregate worktree is
 unchanged. The pipeline records `results/post-validation-skip.json` and skips
