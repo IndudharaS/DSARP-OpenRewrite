@@ -87,6 +87,7 @@ class ManifestRecord:
     public_members_affected: list[str] | None = None
     compatibility_strategy: str = "unknown"
     automatic_execution_allowed: bool = False
+    candidate_origin: str = "model_prediction"
 
 
 def set_api_impact(record: ManifestRecord, *, public: bool, member_level: bool) -> None:
@@ -329,61 +330,48 @@ def rank_move_classes(
     affected: set[str], types: dict[str, JavaType]
 ) -> tuple[list[tuple[JavaType, str, float, str]], str]:
     edges = dependency_candidates(affected, types)
-    reciprocal_pairs: list[tuple[str, str]] = []
-    for source, target in edges:
-        if (target, source) in edges and source < target:
-            reciprocal_pairs.append((source, target))
-
-    if not reciprocal_pairs:
-        return [], "no direct reciprocal package dependency found"
-
-    candidates: list[tuple[int, int, int, int, int, str, str, JavaType]] = []
-    for left, right in reciprocal_pairs:
-        left_to_right = edges[(left, right)]
-        right_to_left = edges[(right, left)]
-        directions = [
-            (left, right, left_to_right),
-            (right, left, right_to_left),
-        ]
-        for importer_package, imported_package, imported_types in directions:
-            for qualified_name, import_count in imported_types.items():
-                candidate = types[qualified_name]
-                # Prefer the weaker direction and a type referenced by fewer files.
-                direction_weight = sum(imported_types.values())
-                destination_modules = {
-                    item.module for item in types.values() if item.package == importer_package
-                }
-                cross_module = int(candidate.module not in destination_modules)
-                production_to_test = int(
-                    candidate.source_set == "main" and is_test_namespace(importer_package)
+    candidates: list[tuple[int, int, int, int, int, int, str, str, JavaType]] = []
+    for (importer_package, imported_package), imported_types in edges.items():
+        reciprocal = (imported_package, importer_package) in edges
+        for qualified_name, import_count in imported_types.items():
+            candidate = types[qualified_name]
+            # Prefer the weaker direction and a type referenced by fewer files.
+            direction_weight = sum(imported_types.values())
+            destination_modules = {
+                item.module for item in types.values() if item.package == importer_package
+            }
+            cross_module = int(candidate.module not in destination_modules)
+            production_to_test = int(
+                candidate.source_set == "main" and is_test_namespace(importer_package)
+            )
+            candidates.append(
+                (
+                    0 if reciprocal else 1,
+                    production_to_test,
+                    cross_module,
+                    int(candidate.is_public),
+                    direction_weight,
+                    import_count,
+                    qualified_name,
+                    importer_package,
+                    candidate,
                 )
-                candidates.append(
-                    (
-                        production_to_test,
-                        cross_module,
-                        int(candidate.is_public),
-                        direction_weight,
-                        import_count,
-                        qualified_name,
-                        importer_package,
-                        candidate,
-                    )
-                )
+            )
 
     if not candidates:
-        return [], "reciprocal packages found but no imported source type was resolved"
+        return [], "no dependency candidate was resolved between affected packages"
 
     candidates.sort(key=lambda item: item[:-1])
     ranked: list[tuple[JavaType, str, float, str]] = []
     seen: set[tuple[str, str]] = set()
-    for production_to_test, cross_module, public_api, direction_weight, import_count, qualified_name, destination, candidate in candidates:
+    for reciprocal_penalty, production_to_test, cross_module, public_api, direction_weight, import_count, qualified_name, destination, candidate in candidates:
         key = (qualified_name, destination)
         if key in seen or candidate.package == destination:
             continue
         seen.add(key)
         score = round((import_count / max(direction_weight, 1)) * 100.0, 4)
         reason = (
-            f"ranked reciprocal dependency candidate; direction weight={direction_weight}, "
+            f"ranked {'reciprocal' if reciprocal_penalty == 0 else 'one-way'} dependency candidate; direction weight={direction_weight}, "
             f"type references={import_count}, same module={not bool(cross_module)}, "
             f"public API={bool(public_api)}"
         )
@@ -574,6 +562,12 @@ def generate(args: argparse.Namespace) -> None:
                     public=candidate.risk_level == "high_public_api",
                     member_level=True,
                 )
+                if source_java_type and source_java_type.source_set == "test":
+                    record.api_impact = "test_only"
+                    record.public_types_affected = []
+                    record.public_members_affected = []
+                    record.compatibility_strategy = "not_required"
+                    record.automatic_execution_allowed = True
                 if candidate_status == "ready_for_dry_run":
                     recipe_name = f"generated.architecture.P{index}_MoveMethod_{safe_fragment(candidate.source_member)}"
                     recipe_file = recipe_dir / f"prediction-{index:04d}-move-method-{safe_fragment(candidate.source_member).lower()}.yml"
@@ -732,6 +726,40 @@ def generate(args: argparse.Namespace) -> None:
 
         records.append(record)
 
+    if getattr(args, "include_curated_filesize", False):
+        source_name = "org.apache.logging.log4j.core.appender.rolling.FileSize"
+        destination_name = "org.apache.logging.log4j.core.appender.rolling.action.FileSize"
+        source = types.get(source_name)
+        if source and destination_name not in types:
+            index = len(rows) + 1
+            recipe_name = "generated.architecture.Curated_Move_FileSize"
+            recipe_file = recipe_dir / "curated-move-filesize.yml"
+            recipe_file.write_text(recipe_yaml(
+                recipe_name, source_name, destination_name,
+                "Evidence-backed Log4j2 FileSize move with the built-in public-API compatibility facade.",
+            ), encoding="utf-8")
+            records.append(ManifestRecord(
+                prediction_id=index,
+                architecture_smell="Curated evidence-backed candidate",
+                affected_elements=[source.package, destination_name.rsplit(".", 1)[0]],
+                predicted_refactoring="Move Class", top_refactoring="Move Class",
+                model_rank=None, model_score=None, source_type=source_name,
+                destination_type=destination_name, source_package=source.package,
+                destination_package=destination_name.rsplit(".", 1)[0],
+                status="ready_for_dry_run",
+                reason="explicit evidence-backed FileSize experiment; compatibility facade required",
+                recipe_name=recipe_name,
+                recipe_file=str(recipe_file.relative_to(output_dir)), candidate_score=100.0,
+                risk_level="curated_compatibility", severity="high", severity_score=5,
+                severity_reason="curated Log4j2 compatibility experiment",
+                refactoring_kind="Move Class", analysis_source="curated_evidence",
+                structural_score=100.0, precondition_status="ready_for_dry_run",
+                api_impact="public_class", public_types_affected=[source_name],
+                public_members_affected=[], compatibility_strategy="file_size_facade",
+                automatic_execution_allowed=True, candidate_origin="curated_evidence",
+            ))
+            candidate_count += 1
+
     manifest = {
         "repository": str(repository),
         "predictions": str(args.predictions.resolve()),
@@ -774,6 +802,8 @@ def main() -> None:
     parser.add_argument("--elements-separator", default="|")
     parser.add_argument("--semantic-analysis", type=Path,
                         help="OpenRewrite semantic dependency JSON; import analysis remains Move Class fallback")
+    parser.add_argument("--include-curated-filesize", action="store_true",
+                        help="include the evidence-backed Log4j2 FileSize compatibility experiment")
     parser.add_argument(
         "--severity-categories", default="high,medium,low",
         help="comma-separated categories to process: high,medium,low (default: all)",

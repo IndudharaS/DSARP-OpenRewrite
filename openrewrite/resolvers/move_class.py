@@ -17,13 +17,16 @@ def rank_semantic_move_classes(methods: list[JavaMethod], affected: set[str]) ->
                 edges[(method.package, dependency.target_package)][dependency.target_type] += dependency.count
     candidates = []
     for (source_package, target_package), targets in sorted(edges.items()):
-        if (target_package, source_package) not in edges:
-            continue
+        reciprocal = (target_package, source_package) in edges
         direction_total = sum(targets.values())
         for target_type, count in targets.items():
             score = round(100.0 * count / max(direction_total, 1), 4)
-            reason = ("ranked semantic reciprocal dependency candidate; "
+            reason = (f"ranked semantic {'reciprocal' if reciprocal else 'one-way'} dependency candidate; "
                       f"resolved references={count}, direction references={direction_total}")
-            candidates.append((-score, target_type, source_package, score, reason))
+            # Reciprocal package edges are strongest evidence for a cycle, but
+            # one-way edges are still useful for hub/unstable smells and often
+            # expose safer internal types missed by the old resolver.
+            candidates.append((0 if reciprocal else 1, -score, target_type,
+                               source_package, score, reason))
     return [(target, destination, score, reason)
-            for _, target, destination, score, reason in sorted(candidates)]
+            for _, _, target, destination, score, reason in sorted(candidates)]

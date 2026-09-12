@@ -60,6 +60,16 @@ They still enter `manual_review` unless risky-candidate execution is explicitly
 enabled; enabling it does not bypass meaningful-diff, formatting, Maven,
 aggregate, or Arcan gates. A vague `Move Method` label never reaches execution.
 
+When multiple methods are available, executable candidates are ranked before
+higher-scoring candidates that fail source-state, destination, visibility, or
+dependency-context gates. Public test-source methods are recorded as
+`test_only`; production public methods still require explicit risk approval.
+
+Move Class resolution considers reciprocal dependencies first and then one-way
+semantic/import dependencies. The latter broadens the search for safe internal
+types in hub-like and unstable-dependency smells without weakening module,
+source-set, metadata, destination-conflict, or original-package dependency gates.
+
 ## Assigned Logging-Log4j2 revision
 
 Revision: `4f474b32751f4ccad67424ca585612584440cd63`.
@@ -81,6 +91,12 @@ The validated change moves
 `org.apache.logging.log4j.core.appender.rolling.FileSize` to
 `org.apache.logging.log4j.core.appender.rolling.action.FileSize`, updates its
 usages/tests, and retains the old public API through a compatibility facade.
+
+The dashboard option **Include evidence-backed Log4j2 FileSize refactoring**
+adds this as `candidate_origin=curated_evidence`. It is intentionally separate
+from model predictions, runs first in isolated validation, installs the known
+compatibility facade, and must still pass Maven, focused-test, diff, API, and
+final verification gates. It is rejected for non-Log4j2 systems.
 
 Matched Arcan 1.2.1 measurement produced:
 

@@ -138,7 +138,7 @@ def api_impact(record: dict[str, object]) -> str:
     return "unknown_api"
 
 
-def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int]:
+def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int, int]:
     """Prioritize safer API changes before public or semantically unknown changes."""
     impact_order = {
         "internal_only": 0,
@@ -150,6 +150,7 @@ def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int]:
     }
     severity_order = {"high": 0, "medium": 1, "low": 2}
     return (
+        0 if record.get("candidate_origin") == "curated_evidence" else 1,
         impact_order.get(api_impact(record), 5),
         severity_order.get(str(record.get("severity")), 3),
         -int(record.get("severity_score") or 0),
@@ -201,7 +202,7 @@ def main() -> None:
                 else "not_required" if row["api_impact"] == "internal_only" else "unknown"
             )
         row["automatic_execution_allowed"] = (
-            row["api_impact"] == "internal_only"
+            row["api_impact"] in {"internal_only", "test_only"}
             or has_compatibility_strategy(row, args.compatibility_profile)
         )
     results, validated = [], []
@@ -246,7 +247,8 @@ def main() -> None:
         recipe = generated / str(record["recipe_file"])
         log_dir = output / "logs" / f"prediction-{prediction:04d}"
         if (not args.allow_risky_candidates
-                and record.get("risk_level") == "high_public_api" and not has_compatibility_strategy(
+                and api_impact(record) in {"protected_api", "public_method", "public_class"}
+                and not has_compatibility_strategy(
             record, args.compatibility_profile
         )):
             results.append({
@@ -396,6 +398,12 @@ def main() -> None:
             (impact, sum(1 for row in candidates if row["api_impact"] == impact))
             for impact in {str(row["api_impact"]) for row in candidates}
         )),
+        "candidate_origin_counts": dict(sorted(
+            (origin, sum(1 for row in candidates
+                         if str(row.get("candidate_origin", "model_prediction")) == origin))
+            for origin in {str(row.get("candidate_origin", "model_prediction"))
+                           for row in candidates}
+        )),
         "status_counts": status_counts,
         "failure_category_counts": category_counts,
         "records": results,
@@ -403,6 +411,7 @@ def main() -> None:
     (output / "validation-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     with (output / "validation-report.csv").open("w", newline="", encoding="utf-8") as handle:
         fields = ["prediction_id", "severity", "severity_score", "batch_number",
+                  "candidate_origin",
                   "refactoring_kind", "analysis_source", "source_type", "destination_type",
                   "source_member", "source_signature", "destination_class",
                   "foreign_affinity", "destination_class_affinity", "source_state_penalty",

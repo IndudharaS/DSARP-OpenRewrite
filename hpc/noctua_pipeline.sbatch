@@ -133,6 +133,9 @@ pipeline_policy_arguments=()
 if [[ "${ALLOW_RISKY_CANDIDATES:-0}" == "1" ]]; then
   pipeline_policy_arguments+=(--allow-risky-candidates)
 fi
+if [[ "${INCLUDE_CURATED_FILESIZE:-0}" == "1" ]]; then
+  pipeline_policy_arguments+=(--include-curated-filesize)
+fi
 if [[ -n "$PROFILE" ]]; then
   pipeline_policy_arguments+=(--profile "$PROFILE")
 fi

@@ -21,7 +21,7 @@ def resolve_move_method(
     allows exact call-site owner rewriting without inventing a receiver or
     changing method parameters.
     """
-    candidates: list[tuple[float, str, str, MoveMethodCandidate]] = []
+    candidates: list[tuple[int, float, str, str, MoveMethodCandidate]] = []
     declared_methods = {(method.qualified_owner, method.signature) for method in methods}
     for method in methods:
         if method.package not in affected_packages or method.name in {"<init>", "<clinit>"}:
@@ -78,5 +78,8 @@ def resolve_move_method(
             source_state_penalty=round(state_penalty, 6), structural_score=round(score, 6),
             risk_level=risk, status=status, reason=reason,
         )
-        candidates.append((-score, method.qualified_owner, method.signature, candidate))
-    return sorted(candidates, key=lambda item: item[:3])[0][3] if candidates else None
+        # Do not let a high-scoring but unsafe method hide a slightly lower
+        # scoring executable method.  Safety is the primary ordering key.
+        candidates.append((0 if status == "ready_for_dry_run" else 1, -score,
+                           method.qualified_owner, method.signature, candidate))
+    return sorted(candidates, key=lambda item: item[:4])[0][4] if candidates else None

@@ -61,6 +61,16 @@ class MoveMethodResolverTests(unittest.TestCase):
         self.assertIsNone(resolve_move_method([method()], {"example.left", "example.right"},
                                              {"example.left.A", "example.right.B"}, claimed))
 
+    def test_executable_method_is_preferred_over_stronger_unsafe_method(self):
+        unsafe = method(name="unsafe", signature="unsafe(example.right.B)",
+                        source_state_references=1,
+                        dependencies=(MethodDependency("example.right.B", "example.right", "method_call", 20),))
+        safe = method(name="safe", signature="safe(example.right.B)",
+                      dependencies=(MethodDependency("example.right.B", "example.right", "method_call", 3),))
+        candidate = self.resolve([unsafe, safe])
+        self.assertEqual(candidate.status, "ready_for_dry_run")
+        self.assertEqual(candidate.source_member, "safe")
+
 
 class MoveMethodManifestTests(unittest.TestCase):
     def generate(self, target_path="module/src/main/java/example/right/B.java"):

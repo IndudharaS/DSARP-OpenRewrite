@@ -94,6 +94,21 @@ def main() -> None:
     labels: Counter[str] = Counter()
     for row in accepted:
         labels.update(value for value in str(row["selected_refactoring_labels"]).split("|") if value)
+    label_balance = {
+        label: {
+            "positive_records": count,
+            "prevalence": round(count / len(accepted), 6),
+            # Mirrors the bounded BCE positive weighting used by the training
+            # notebook, making the actual imbalance treatment reproducible.
+            "bounded_positive_weight": round(
+                min(10.0, max(1.0, (len(accepted) - count) / max(count, 1))), 6
+            ),
+        }
+        for label, count in sorted(labels.items())
+    }
+    imbalance_ratio = (
+        max(labels.values()) / max(min(labels.values()), 1) if labels else 0.0
+    )
     report = {
         "schema_version": 1,
         "input_records": raw_count,
@@ -106,6 +121,9 @@ def main() -> None:
         "repositories": dict(repositories),
         "architecture_smells": dict(smells),
         "refactoring_labels": dict(labels),
+        "label_balance": label_balance,
+        "label_imbalance_ratio": round(imbalance_ratio, 6),
+        "training_loss": "bounded_inverse_frequency_BCE",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(json.dumps(row) + "\n" for row in accepted), encoding="utf-8")

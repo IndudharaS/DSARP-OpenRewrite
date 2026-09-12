@@ -40,6 +40,7 @@ TRAINING_DATASET=""
 PRETRAINED_MODEL_DIR=""
 REMINE=0
 ALLOW_RISKY_CANDIDATES=0
+INCLUDE_CURATED_FILESIZE=0
 SEVERITY_CATEGORIES="high,medium,low"
 BATCH_SIZE=10
 START_BATCH=1
@@ -80,6 +81,9 @@ Options:
   --allow-risky-candidates
                          Execute high-risk public-API candidates in isolated
                          worktrees. Only Maven-validated changes are applied.
+  --include-curated-filesize
+                         Add the evidence-backed Log4j2 FileSize move with its
+                         compatibility facade as a separately labelled candidate.
   --severity-categories LIST
                          Comma-separated high,medium,low categories (default: all).
   --batch-size NUMBER    Candidates validated per batch (default: 10).
@@ -132,6 +136,7 @@ while (($#)); do
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
     --allow-risky-candidates) ALLOW_RISKY_CANDIDATES=1; shift ;;
+    --include-curated-filesize) INCLUDE_CURATED_FILESIZE=1; shift ;;
     --severity-categories) SEVERITY_CATEGORIES="${2:?missing categories}"; shift 2 ;;
     --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
@@ -855,12 +860,21 @@ if should_run rewrite; then
     echo "WARNING: semantic analysis failed; Move Class import fallback remains available, Move Method will stay unresolved." >&2
   fi
 
-  "$OPENREWRITE_GENERATOR" \
+  generator_arguments=(
     --repository "$REWRITE_REPO" \
     --predictions "$PREDICTIONS" \
     --output-dir "$RESULTS_DIR/generated-openrewrite" \
     --severity-categories "$SEVERITY_CATEGORIES" \
     "${semantic_arguments[@]}"
+  )
+  if ((INCLUDE_CURATED_FILESIZE)); then
+    [[ "$PROFILE" == "log4j2" ]] || {
+      echo "--include-curated-filesize is available only for the log4j2 profile" >&2
+      exit 2
+    }
+    generator_arguments+=(--include-curated-filesize)
+  fi
+  "$OPENREWRITE_GENERATOR" "${generator_arguments[@]}"
 
   validator_arguments=(
     --repository "$REWRITE_REPO"

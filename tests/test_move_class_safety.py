@@ -135,6 +135,13 @@ class MoveClassSafetyTests(unittest.TestCase):
                     "api_impact": "internal_only"}
         self.assertEqual(sorted([public, internal], key=candidate_priority)[0], internal)
 
+    def test_curated_evidence_is_executed_in_first_batch(self):
+        internal = {"prediction_id": 1, "severity": "high", "severity_score": 5,
+                    "api_impact": "internal_only", "candidate_origin": "model_prediction"}
+        curated = {"prediction_id": 999, "severity": "high", "severity_score": 5,
+                   "api_impact": "public_class", "candidate_origin": "curated_evidence"}
+        self.assertEqual(sorted([internal, curated], key=candidate_priority)[0], curated)
+
     def test_manifest_classifies_public_move_class_api_impact(self):
         temporary, manifest = self.run_generator(
             "module/src/main/java/example/left/A.java",
@@ -177,6 +184,53 @@ class MoveClassSafetyTests(unittest.TestCase):
             self.assertEqual(record["status"], "ready_for_dry_run")
             self.assertEqual(record["source_type"], "example.right.B")
             self.assertEqual(record["api_impact"], "internal_only")
+        finally:
+            temporary.cleanup()
+
+    def test_one_way_dependency_can_supply_safe_internal_candidate(self):
+        temporary, manifest = self.run_generator(
+            "module/src/main/java/example/left/A.java",
+            "module/src/main/java/example/right/B.java",
+            {"module/src/main/java/example/right/B.java": "package example.right; class B {}"},
+        )
+        try:
+            record = manifest["records"][0]
+            self.assertEqual(record["status"], "ready_for_dry_run")
+            self.assertEqual(record["source_type"], "example.right.B")
+            self.assertIn("one-way dependency candidate", record["reason"])
+        finally:
+            temporary.cleanup()
+
+    def test_curated_filesize_is_labelled_and_executable(self):
+        temporary = tempfile.TemporaryDirectory(); root = Path(temporary.name)
+        repo = root / "repo"
+        files = {
+            "log4j-core/src/main/java/org/apache/logging/log4j/core/appender/rolling/FileSize.java":
+                "package org.apache.logging.log4j.core.appender.rolling; public final class FileSize {}",
+            "log4j-core/src/main/java/org/apache/logging/log4j/core/appender/rolling/action/Action.java":
+                "package org.apache.logging.log4j.core.appender.rolling.action; public interface Action {}",
+        }
+        for relative, source in files.items():
+            path = repo / relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(source)
+        predictions = root / "predictions.csv"
+        predictions.write_text(
+            "architecture_smell,affected_elements,suggestions\n"
+            "Cyclic Dependency,org.apache.logging.log4j.core.appender.rolling|org.apache.logging.log4j.core.appender.rolling.action,Extract Method (0.7)\n"
+        )
+        output = root / "out"
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                generate(Namespace(repository=repo, predictions=predictions, output_dir=output,
+                    smell_column="architecture_smell", elements_column="affected_elements",
+                    suggestions_column="suggestions", elements_separator="|",
+                    severity_categories="high,medium,low", semantic_analysis=None,
+                    include_curated_filesize=True))
+            records = json.loads((output / "manifest.json").read_text())["records"]
+            record = next(row for row in records if row["candidate_origin"] == "curated_evidence")
+            self.assertEqual(record["candidate_origin"], "curated_evidence")
+            self.assertEqual(record["compatibility_strategy"], "file_size_facade")
+            self.assertTrue(record["automatic_execution_allowed"])
+            self.assertTrue((output / record["recipe_file"]).is_file())
         finally:
             temporary.cleanup()
 

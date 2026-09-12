@@ -134,7 +134,14 @@ measurement are still required after every generated recipe.
 
 ## Model and automation limits
 
-Model training is separate from concretization and is unchanged by this work.
+Model training is separate from repository-specific concretization.
+
+Training uses bounded inverse-frequency positive weights in the multi-label BCE
+loss and selects checkpoints by macro F1. `training-data-quality.json` records
+per-label prevalence, the effective bounded weight, and the corpus imbalance
+ratio so retraining behavior can be audited rather than inferred from aggregate
+accuracy alone.
+
 All input rows receive five ranked suggestions. The generator executes
 Move Class and only the explicitly constrained Move Method subset. Extract
 Method remains unsupported because it requires statement-range selection,

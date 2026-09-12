@@ -19,6 +19,7 @@ FORWARD=()
 RUN_ROOT=""
 PROFILE=""
 ALLOW_RISKY_CANDIDATES=0
+INCLUDE_CURATED_FILESIZE=0
 SEVERITY_CATEGORIES="high,medium,low"
 BATCH_SIZE=10
 START_BATCH=1
@@ -50,6 +51,8 @@ Inputs:
                             logging-log4j2 preset and generic otherwise.
   --allow-risky-candidates  Experimentally execute public-API candidates in
                             isolated worktrees; Maven validation is still required.
+  --include-curated-filesize
+                            Include the evidence-backed Log4j2 FileSize move.
   --severity-categories LIST
                             Comma-separated high,medium,low categories.
   --batch-size NUMBER       Candidates per validation batch (default: 10).
@@ -83,6 +86,7 @@ while (($#)); do
     --remine) REMINE=1; shift ;;
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
     --allow-risky-candidates) ALLOW_RISKY_CANDIDATES=1; shift ;;
+    --include-curated-filesize) INCLUDE_CURATED_FILESIZE=1; shift ;;
     --severity-categories) SEVERITY_CATEGORIES="${2:?missing categories}"; shift 2 ;;
     --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
@@ -143,6 +147,10 @@ else
 fi
 if ((ALLOW_RISKY_CANDIDATES)); then
   arguments+=(--allow-risky-candidates)
+fi
+if ((INCLUDE_CURATED_FILESIZE)); then
+  [[ "$PROFILE" == "log4j2" ]] || { echo "Curated FileSize is Log4j2-only" >&2; exit 2; }
+  arguments+=(--include-curated-filesize)
 fi
 arguments+=(--severity-categories "$SEVERITY_CATEGORIES" --batch-size "$BATCH_SIZE" --start-batch "$START_BATCH" --max-batches "$MAX_BATCHES")
 arguments+=(--max-commits-per-repo "$MAX_COMMITS_PER_REPO")
