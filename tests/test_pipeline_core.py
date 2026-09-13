@@ -268,6 +268,8 @@ class EvidenceTests(unittest.TestCase):
             "Expecting actual not to be empty within 2 seconds", script)
         self.assertIn(
             "Rollover completion verification failure", script)
+        self.assertIn("complete_reactor_after_accepted_test_failure", script)
+        self.assertIn('./mvnw -DskipTests verify', script)
 
     def test_mining_commit_limit_is_validated(self) -> None:
         self.assertEqual(validate_max_commits({}), 500)

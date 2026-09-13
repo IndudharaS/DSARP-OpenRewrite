@@ -244,6 +244,13 @@ raise SystemExit(0 if result.returncode == 0 and expected and expected.issubset(
 PY
 }
 
+complete_reactor_after_accepted_test_failure() {
+  local repository="$1" log_file="$2"
+  echo "Completing the Maven reactor after the accepted test-only failure." | tee -a "$log_file"
+  (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw -DskipTests verify) \
+    2>&1 | tee -a "$log_file"
+}
+
 run_expected_spring_failure() {
   local repository="$1" log_file="$2" status excludes_file attempt_log retry_log retry_status line
   local dynamic_retry_log dynamic_retry_status failed_test_selectors
@@ -278,6 +285,7 @@ run_expected_spring_failure() {
   if grep -q "Log4j2SpringBootInitTest.testEnvironment" "$attempt_log" \
       && grep -Eq "expected: <1> but was: <5>|expected 1.*actual 5" "$attempt_log"; then
     echo "Accepted known baseline condition: Spring Boot test expected 1 message and observed 5."
+    complete_reactor_after_accepted_test_failure "$repository" "$log_file"
     return
   fi
 
@@ -311,6 +319,7 @@ run_expected_spring_failure() {
     if ((retry_status == 0)); then
       echo "Accepted reproducible test-harness condition: all allowlisted failures passed in isolated retry." \
         | tee -a "$retry_log" "$log_file"
+      complete_reactor_after_accepted_test_failure "$repository" "$log_file"
       return
     fi
     echo "Allowlisted failure retry did not pass. See $retry_log" >&2
@@ -356,6 +365,7 @@ PY
     if ((dynamic_retry_status == 0)); then
       echo "Accepted baseline test-harness flakiness: every originally failed test passed in isolated retry." \
         | tee -a "$dynamic_retry_log" "$log_file"
+      complete_reactor_after_accepted_test_failure "$repository" "$log_file"
       return
     fi
     # This Log4j2 cron-rollover test uses a two-second assertion against a
@@ -370,6 +380,7 @@ PY
         && grep -q "Expecting actual not to be empty within 2 seconds" "$dynamic_retry_log"; then
       echo "Accepted known HPC filesystem timing condition: RollingAppenderDirectCronTest alone missed its two-second rollover visibility deadline." \
         | tee -a "$dynamic_retry_log" "$log_file"
+      complete_reactor_after_accepted_test_failure "$repository" "$log_file"
       return
     fi
     echo "Isolated retry reproduced a failure. See $dynamic_retry_log" >&2
