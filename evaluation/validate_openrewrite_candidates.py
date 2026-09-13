@@ -8,7 +8,14 @@ import csv
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+# This file is invoked directly by the shell pipeline. Ensure repository-local
+# packages remain importable regardless of the caller's working directory.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from openrewrite.compatibility_profiles import PROFILE_DIRECTORY, compatibility_strategy
 
