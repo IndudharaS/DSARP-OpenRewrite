@@ -221,11 +221,27 @@ require_command() {
 
 has_validated_changes() {
   local report="$RESULTS_DIR/openrewrite-validation/validation-report.json"
-  if [[ -f "$report" ]]; then
-    [[ "$(jq -r '.validated_count // 0' "$report")" -gt 0 ]]
-    return
-  fi
-  [[ -d "$REWRITE_REPO" && -n "$(git -C "$REWRITE_REPO" status --porcelain 2>/dev/null)" ]]
+  local applied="$RESULTS_DIR/openrewrite-validation/applied-candidates.json"
+  [[ -f "$report" && -f "$applied" && -d "$REWRITE_REPO" ]] || return 1
+  [[ "$(jq -r '.validated_count // 0' "$report")" -gt 0 ]] || return 1
+  [[ "$(git -C "$REWRITE_REPO" rev-parse HEAD 2>/dev/null)" == "$VERSION_ID" ]] || return 1
+  "$PYTHON" - "$applied" "$REWRITE_REPO" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+
+expected = set(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")).get("changed_files", []))
+result = subprocess.run(
+    ["git", "status", "--porcelain", "--untracked-files=all"], cwd=sys.argv[2],
+    text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+)
+actual = set()
+for line in result.stdout.splitlines():
+    value = line[3:].strip()
+    if " -> " in value:
+        value = value.split(" -> ", 1)[1]
+    actual.add(value)
+raise SystemExit(0 if result.returncode == 0 and expected and expected.issubset(actual) else 1)
+PY
 }
 
 run_expected_spring_failure() {
@@ -455,6 +471,98 @@ Path(destination).parent.mkdir(parents=True, exist_ok=True)
 Path(destination).write_text(rendered, encoding="utf-8")
 PY
 }
+
+write_stage_contract() {
+  local stage="$1" repository="$2"
+  shift 2
+  "$PYTHON" - "$RUN_ROOT/stage-state/$stage.json" "$stage" "$VERSION_ID" \
+    "$repository" "$@" <<'PY'
+import hashlib, json, subprocess, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, stage, version, repository, *artifacts = sys.argv[1:]
+repo = Path(repository) if repository else None
+for artifact in artifacts:
+    if not Path(artifact).is_file():
+        raise SystemExit(f"stage {stage} did not produce required artifact: {artifact}")
+head = None
+worktree = None
+if repo and repo.exists():
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    digest = hashlib.sha256(subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=repo))
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo, text=True
+    )
+    digest.update(status.encode())
+    for line in status.splitlines():
+        if line.startswith("?? "):
+            path = repo / line[3:]
+            if path.is_file():
+                digest.update(path.read_bytes())
+    worktree = digest.hexdigest()
+payload = {
+    "stage": stage, "status": "successful", "timestamp": datetime.now(timezone.utc).isoformat(),
+    "version_id": version, "repository_head": head, "worktree_status_sha256": worktree,
+    "artifacts": {str(Path(path).resolve()): hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                  for path in artifacts},
+}
+target = Path(output); target.parent.mkdir(parents=True, exist_ok=True)
+target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+verify_stage_contract() {
+  local stage="$1" repository="$2"
+  "$PYTHON" - "$RUN_ROOT/stage-state/$stage.json" "$VERSION_ID" "$repository" <<'PY'
+import hashlib, json, subprocess, sys
+from pathlib import Path
+
+contract = Path(sys.argv[1])
+if not contract.is_file():
+    raise SystemExit(f"Cannot resume: missing successful stage contract {contract}")
+data = json.loads(contract.read_text(encoding="utf-8"))
+if data.get("status") != "successful" or data.get("version_id") != sys.argv[2]:
+    raise SystemExit(f"Cannot resume: invalid or mismatched stage contract {contract}")
+for name, expected in data.get("artifacts", {}).items():
+    path = Path(name)
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        raise SystemExit(f"Cannot resume: stage artifact changed or disappeared: {path}")
+repo = Path(sys.argv[3]) if sys.argv[3] else None
+if repo and data.get("repository_head"):
+    if not repo.exists():
+        raise SystemExit(f"Cannot resume: repository is missing: {repo}")
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    if head != data["repository_head"] or head != sys.argv[2]:
+        raise SystemExit(f"Cannot resume: repository HEAD {head} does not match {sys.argv[2]}")
+    expected_worktree = data.get("worktree_status_sha256")
+    if expected_worktree:
+        digest = hashlib.sha256(subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=repo))
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo, text=True
+        )
+        digest.update(status.encode())
+        for line in status.splitlines():
+            if line.startswith("?? "):
+                path = repo / line[3:]
+                if path.is_file():
+                    digest.update(path.read_bytes())
+        if digest.hexdigest() != expected_worktree:
+            raise SystemExit(f"Cannot resume: repository worktree changed after stage {data.get('stage')}")
+PY
+}
+
+if ((START_INDEX > 0)); then
+  case "$START_STAGE" in
+    baseline) verify_stage_contract clone "$BASE_REPO" ;;
+    rewrite) verify_stage_contract baseline "$BASE_REPO" ;;
+    focused_test) verify_stage_contract rewrite "$REWRITE_REPO"; has_validated_changes ;;
+    format) verify_stage_contract focused_test "$REWRITE_REPO"; has_validated_changes ;;
+    final_verify) verify_stage_contract format "$REWRITE_REPO"; has_validated_changes ;;
+    smells) verify_stage_contract final_verify "$REWRITE_REPO"; has_validated_changes ;;
+    summary) verify_stage_contract smells "$REWRITE_REPO" ;;
+  esac
+fi
 
 if ((CLEAN)) && [[ -e "$RUN_ROOT" ]]; then
   backup="${RUN_ROOT}-backup-$(date +%Y%m%d-%H%M%S)"
@@ -827,6 +935,7 @@ if should_run clone; then
     echo "Existing baseline repository is not clean: $BASE_REPO" >&2
     exit 1
   }
+  write_stage_contract clone "$BASE_REPO"
 fi
 
 if should_run baseline; then
@@ -840,6 +949,8 @@ if should_run baseline; then
     --output-dir "$RESULTS_DIR/arcan-baseline-matched" \
     --java-home "$JAVA_HOME_17" \
     --arcan-home "$ARCAN_HOME"
+  write_stage_contract baseline "$BASE_REPO" \
+    "$RESULTS_DIR/arcan-baseline-matched/summary.json"
 fi
 
 if should_run rewrite; then
@@ -906,9 +1017,40 @@ if should_run rewrite; then
       --results-dir "$RESULTS_DIR" \
       --log-dir "$LOG_DIR" \
       --mode all
+    "$PYTHON" - "$RESULTS_DIR/openrewrite-validation/validation-report.json" \
+      "$REWRITE_REPO" "$RESULTS_DIR/openrewrite-validation/applied-candidates.json" <<'PY'
+import json, subprocess, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+process = subprocess.run(
+    ["git", "status", "--porcelain", "--untracked-files=all"], cwd=sys.argv[2],
+    text=True, stdout=subprocess.PIPE, check=True,
+)
+changed = []
+for line in process.stdout.splitlines():
+    value = line[3:].strip()
+    if " -> " in value:
+        value = value.split(" -> ", 1)[1]
+    changed.append(value)
+validated = [row for row in report.get("records", [])
+             if row.get("validation_status") == "validated"]
+payload = {
+    "created_at": datetime.now(timezone.utc).isoformat(),
+    "candidate_ids": [row.get("candidate_id", row.get("prediction_id")) for row in validated],
+    "prediction_ids": [row.get("prediction_id") for row in validated],
+    "changed_files": sorted(set(changed)),
+}
+if not payload["candidate_ids"] or not payload["changed_files"]:
+    raise SystemExit("validated candidates did not produce an applied Git diff")
+Path(sys.argv[3]).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
   else
     echo "No candidate passed isolated source/build/API validation; leaving the worktree unchanged."
   fi
+  write_stage_contract rewrite "$REWRITE_REPO" \
+    "$RESULTS_DIR/openrewrite-validation/validation-report.json"
 fi
 
 if should_run focused_test; then
@@ -923,6 +1065,7 @@ if should_run focused_test; then
   else
     echo "No project-specific focused test configured; isolated and full verification remain enabled."
   fi
+  write_stage_contract focused_test "$REWRITE_REPO"
 fi
 
 if should_run format; then
@@ -942,6 +1085,7 @@ if should_run format; then
   if has_validated_changes; then
     git -C "$REWRITE_REPO" diff --check
   fi
+  write_stage_contract format "$REWRITE_REPO"
 fi
 
 if should_run final_verify; then
@@ -951,6 +1095,7 @@ if should_run final_verify; then
   else
     echo "Skipped: no validated source changes require another full Maven build."
   fi
+  write_stage_contract final_verify "$REWRITE_REPO"
 fi
 
 if should_run smells; then
@@ -983,6 +1128,7 @@ PY
     "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" compare \
       "$RESULTS_DIR/arcan-baseline-matched/summary.json" \
       "$RESULTS_DIR/arcan-refactored/summary.json" \
+      --applied-candidates "$RESULTS_DIR/openrewrite-validation/validation-report.json" \
       --output "$RESULTS_DIR/arcan-comparison.json" >/dev/null
   fi
   jq '.metrics | with_entries(select(.key != "package_cycle_sets"))' \
@@ -1000,6 +1146,7 @@ PY
     --training-data-quality "$RESULTS_DIR/training-data-quality.json" \
     --provenance "$RESULTS_DIR/run-provenance.json" \
     --output "$RESULTS_DIR/experiment-report.json" >/dev/null
+  write_stage_contract smells "$REWRITE_REPO" "$RESULTS_DIR/arcan-comparison.json"
 fi
 
 if should_run summary; then
@@ -1018,4 +1165,5 @@ if should_run summary; then
   git --no-pager -C "$REWRITE_REPO" diff --stat
   echo
   echo "No commit was created. Review the worktree and result files."
+  write_stage_contract summary "$REWRITE_REPO" "$RESULTS_DIR/experiment-report.json"
 fi

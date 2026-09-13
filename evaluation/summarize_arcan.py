@@ -16,6 +16,11 @@ def rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def instances(path: Path) -> list[str]:
+    """Return deterministic full-row identities for non-cycle smell instances."""
+    return sorted({json.dumps(row, sort_keys=True, separators=(",", ":")) for row in rows(path)})
+
+
 def cycles(path: Path) -> list[list[str]]:
     result: set[tuple[str, ...]] = set()
     with path.open(newline="", encoding="utf-8-sig") as handle:
@@ -51,6 +56,8 @@ def summarize(
         "class_metrics_records": len(rows(directory / "CM.csv")),
         "package_cycle_members": package_cycles,
         "class_cycle_members": class_cycles,
+        "hub_like_dependency_instances": instances(directory / "HL.csv"),
+        "unstable_dependency_instances": instances(directory / "UD.csv"),
         "input_manifest_fingerprint": manifest.get("fingerprint") if manifest else None,
         "compiled_class_paths": [item["path"] for item in manifest.get("classes", [])] if manifest else None,
     }
@@ -125,7 +132,10 @@ def summarize_baseline(directory: Path) -> dict[str, object]:
     }
 
 
-def comparison(before: dict[str, object], after: dict[str, object]) -> dict[str, object]:
+def comparison(
+    before: dict[str, object], after: dict[str, object],
+    applied_candidates: dict[str, object] | None = None,
+) -> dict[str, object]:
     metrics = (
         "compiled_classes", "hub_like_dependencies", "unstable_dependencies",
         "unstable_dependencies_filtered_30", "package_cycles", "class_cycles",
@@ -143,6 +153,24 @@ def comparison(before: dict[str, object], after: dict[str, object]) -> dict[str,
         "introduced": [list(value) for value in sorted(after_packages - before_packages)],
         "unchanged": [list(value) for value in sorted(before_packages & after_packages)],
     }
+    instance_sources = {
+        "package_cycles": ("package_cycle_members", True),
+        "class_cycles": ("class_cycle_members", True),
+        "hub_like_dependencies": ("hub_like_dependency_instances", False),
+        "unstable_dependencies": ("unstable_dependency_instances", False),
+    }
+    instance_comparison = {}
+    for name, (key, nested) in instance_sources.items():
+        old_values = before.get(key) or []
+        new_values = after.get(key) or []
+        old_set = {tuple(value) if nested else str(value) for value in old_values}
+        new_set = {tuple(value) if nested else str(value) for value in new_values}
+        render = (lambda value: list(value)) if nested else (lambda value: value)
+        instance_comparison[name] = {
+            "resolved": [render(value) for value in sorted(old_set - new_set)],
+            "introduced": [render(value) for value in sorted(new_set - old_set)],
+            "unchanged": [render(value) for value in sorted(old_set & new_set)],
+        }
     same_version = before.get("version") == after.get("version")
     same_configuration = (
         before.get("analysis_configuration") is not None
@@ -153,16 +181,48 @@ def comparison(before: dict[str, object], after: dict[str, object]) -> dict[str,
     added_paths = sorted(after_paths - before_paths)
     removed_paths = sorted(before_paths - after_paths)
     if before_paths and after_paths:
-        population_limit = max(5, math.ceil(len(before_paths) * 0.01))
         population_difference = len(added_paths) + len(removed_paths)
-        population_compatible = population_difference <= population_limit
-        population_basis = "compiled-class-path-manifest"
+        applied = [row for row in (applied_candidates or {}).get("records", [])
+                   if row.get("validation_status") == "validated"]
+        if applied:
+            def matches(path: str, qualified: str | None) -> bool:
+                if not qualified:
+                    return False
+                suffix = qualified.replace(".", "/")
+                return path.endswith(suffix + ".class") or path.endswith(suffix + "$class.class") \
+                    or (suffix + "$") in path
+            expected_added = {path for path in added_paths if any(
+                matches(path, str(row.get("destination_type") or row.get("destination_class") or ""))
+                for row in applied
+            )}
+            expected_removed = {path for path in removed_paths if any(
+                matches(path, str(row.get("source_type") or ""))
+                and row.get("compatibility_strategy") in {None, "", "not_required", "unknown"}
+                for row in applied
+            )}
+            unexpected_added = sorted(set(added_paths) - expected_added)
+            unexpected_removed = sorted(set(removed_paths) - expected_removed)
+            expected_destinations_observed = all(any(
+                matches(path, str(row.get("destination_type") or row.get("destination_class") or ""))
+                for path in added_paths
+            ) for row in applied if row.get("refactoring_kind") == "Move Class")
+            population_limit = 0
+            population_compatible = (
+                not unexpected_added and not unexpected_removed and expected_destinations_observed
+            )
+            population_basis = "validated-candidate-class-path-contract"
+        else:
+            population_limit = max(1, math.ceil(len(before_paths) * 0.01))
+            population_compatible = population_difference <= population_limit
+            population_basis = "compiled-class-path-manifest"
+            unexpected_added, unexpected_removed = added_paths, removed_paths
     else:
         old_count, new_count = before.get("compiled_classes"), after.get("compiled_classes")
         population_limit = max(5, math.ceil(old_count * 0.01)) if isinstance(old_count, int) else 0
         population_difference = abs(new_count - old_count) if isinstance(old_count, int) and isinstance(new_count, int) else None
         population_compatible = population_difference is not None and population_difference <= population_limit
         population_basis = "compiled-class-count-fallback"
+        unexpected_added, unexpected_removed = added_paths, removed_paths
     comparable = same_version and same_configuration and population_compatible
     warning_reasons = []
     if not same_version:
@@ -187,11 +247,14 @@ def comparison(before: dict[str, object], after: dict[str, object]) -> dict[str,
             "allowed_difference": population_limit,
             "added_class_paths": added_paths,
             "removed_class_paths": removed_paths,
+            "unexpected_added_class_paths": unexpected_added,
+            "unexpected_removed_class_paths": unexpected_removed,
         },
         "comparison_warning": None if comparable else (
             "Aggregate deltas are not valid causal evidence: " + "; ".join(warning_reasons) + "."
         ),
         "metrics": compared,
+        "instance_comparison": instance_comparison,
     }
 
 
@@ -210,6 +273,8 @@ def main() -> None:
     two.add_argument("before", type=Path)
     two.add_argument("after", type=Path)
     two.add_argument("--output", required=True, type=Path)
+    two.add_argument("--applied-candidates", type=Path,
+                     help="validation report used to enforce expected class-path changes")
     args = parser.parse_args()
 
     if args.command == "summarize":
@@ -220,6 +285,8 @@ def main() -> None:
         result = comparison(
             json.loads(args.before.read_text(encoding="utf-8")),
             json.loads(args.after.read_text(encoding="utf-8")),
+            json.loads(args.applied_candidates.read_text(encoding="utf-8"))
+            if args.applied_candidates else None,
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"

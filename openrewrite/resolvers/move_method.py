@@ -11,13 +11,20 @@ MIN_STRUCTURAL_SCORE = 0.70
 MIN_FOREIGN_AFFINITY = 0.60
 
 
+def is_jdk_type(qualified_name: str) -> bool:
+    """Return true for platform types that move with imports, not project ownership."""
+    # ``javax.*`` is intentionally not assumed to be platform-owned: many
+    # modern Java runtimes obtain those APIs from external dependencies.
+    return qualified_name.startswith(("java.", "jdk."))
+
+
 def resolve_move_method(
     methods: list[JavaMethod], affected_packages: set[str], existing_types: set[str],
     claimed: set[tuple[str, str]],
 ) -> MoveMethodCandidate | None:
     """Select the strongest deterministic candidate supported by the recipe.
 
-    Version one intentionally executes only static, non-public methods. This
+    Version one intentionally executes only public static methods. This
     allows exact call-site owner rewriting without inventing a receiver or
     changing method parameters.
     """
@@ -35,7 +42,7 @@ def resolve_move_method(
         counts = Counter()
         total_external = 0
         for dependency in method.dependencies:
-            if dependency.target_package == method.package:
+            if dependency.target_package == method.package or is_jdk_type(dependency.target_type):
                 continue
             counts[dependency.target_type] += dependency.count
             total_external += dependency.count
@@ -56,6 +63,7 @@ def resolve_move_method(
         score = 0.50 * foreign_affinity + 0.30 * destination_affinity + 0.20 * (1 - state_penalty)
         unsupported_context = [dependency for dependency in method.dependencies
                                if dependency.target_package not in {destination_package, "java.lang"}
+                               and not is_jdk_type(dependency.target_type)
                                and dependency.target_type != method.qualified_owner]
         if (target_type, method.signature) in declared_methods:
             status, reason, risk = "destination_conflict", "destination already declares the same method signature", "conflict"

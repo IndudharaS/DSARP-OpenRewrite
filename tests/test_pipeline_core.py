@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 from evaluation.summarize_arcan import comparison, cycles
-from evaluation.validate_openrewrite_candidates import (changed_test_selectors,
+from evaluation.validate_openrewrite_candidates import (affected_maven_modules,
+                                                         changed_test_selectors,
                                                          classify_failure,
                                                          has_compatibility_strategy)
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
@@ -70,6 +71,20 @@ class SuggestionTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_production_changes_map_to_affected_maven_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            (repository / "pom.xml").write_text("<project/>", encoding="utf-8")
+            module = repository / "module-a"
+            module.mkdir()
+            (module / "pom.xml").write_text("<project/>", encoding="utf-8")
+            self.assertEqual(
+                affected_maven_modules(repository, [
+                    "module-a/src/main/java/example/Service.java",
+                ]),
+                ["module-a"],
+            )
+
     def test_changed_java_tests_become_surefire_selectors(self) -> None:
         self.assertEqual(changed_test_selectors([
             "module/src/test/java/example/ServiceLoaderTest.java",
@@ -130,6 +145,44 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(incompatible["aggregate_counts_comparable"])
         self.assertIn("compiled-class populations differ", incompatible["comparison_warning"])
 
+    def test_arcan_compares_smell_instances_not_only_counts(self) -> None:
+        base = {
+            "version": "1.2.1", "analysis_configuration": "a",
+            "compiled_class_paths": ["example/A.class"],
+            "package_cycle_members": [["a", "b"]], "class_cycle_members": [],
+            "hub_like_dependency_instances": ["old"],
+            "unstable_dependency_instances": [],
+        }
+        result = comparison(base, {
+            **base, "package_cycle_members": [["b", "c"]],
+            "hub_like_dependency_instances": ["new"],
+        })
+        self.assertEqual(result["instance_comparison"]["package_cycles"]["resolved"], [["a", "b"]])
+        self.assertEqual(result["instance_comparison"]["package_cycles"]["introduced"], [["b", "c"]])
+        self.assertEqual(result["instance_comparison"]["hub_like_dependencies"]["resolved"], ["old"])
+
+    def test_arcan_population_uses_validated_move_contract(self) -> None:
+        before = {
+            "version": "1.2.1", "analysis_configuration": "a",
+            "compiled_class_paths": ["module/example/left/A.class"],
+            "package_cycle_members": [], "class_cycle_members": [],
+        }
+        candidate = {"records": [{
+            "validation_status": "validated", "refactoring_kind": "Move Class",
+            "source_type": "example.left.A", "destination_type": "example.right.A",
+            "compatibility_strategy": "not_required",
+        }]}
+        expected = comparison(before, {
+            **before, "compiled_class_paths": ["module/example/right/A.class"],
+        }, candidate)
+        self.assertTrue(expected["aggregate_counts_comparable"])
+        unexpected = comparison(before, {
+            **before, "compiled_class_paths": ["module/example/right/A.class", "Other.class"],
+        }, candidate)
+        self.assertFalse(unexpected["aggregate_counts_comparable"])
+        self.assertEqual(unexpected["population_comparison"]["unexpected_added_class_paths"],
+                         ["Other.class"])
+
     def test_failure_classifier(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             log = Path(temporary) / "verify.log"
@@ -139,8 +192,11 @@ class EvidenceTests(unittest.TestCase):
 
     def test_public_api_requires_explicit_compatibility_strategy(self) -> None:
         ordinary = {"source_type": "example.PublicApi"}
-        supported = {"source_type": "org.apache.logging.log4j.core.appender.rolling.FileSize"}
-        self.assertFalse(has_compatibility_strategy(ordinary, "generic"))
+        supported = {
+            "source_type": "org.apache.logging.log4j.core.appender.rolling.FileSize",
+            "destination_type": "org.apache.logging.log4j.core.appender.rolling.action.FileSize",
+        }
+        self.assertFalse(has_compatibility_strategy(ordinary, "none"))
         self.assertTrue(has_compatibility_strategy(supported, "log4j2"))
 
     def test_stage_detection(self) -> None:

@@ -161,14 +161,19 @@ failure, test failure, or tooling/build failure.
 
 ## Aggregate execution recipe
 
-`all-candidates.yml` combines every `ready_for_dry_run` record for review. The
-pipeline validates each member in an isolated Git worktree and builds
+`all-candidates.yml` combines every `ready_for_dry_run` record for review. One
+prediction can own several records: `prediction_id` is the parent and
+`candidate_id` is the unique executable identity. Ranked labels are tried in
+order, including Move Method to Move Class fallback when semantic method
+resolution cannot produce an executable candidate. The pipeline validates each
+member in an isolated Git worktree and builds
 `openrewrite-validation/validated-candidates.yml` from candidates whose
-post-rewrite reactor compilation passes. That validated aggregate—not the raw
+post-rewrite build and affected-module tests pass. It then validates accepted
+candidates cumulatively and records incompatible combinations in
+`aggregate-conflicts.json`. That conflict-filtered aggregate—not the raw
 candidate aggregate—is applied to the experiment tree.
 
 For the assigned Log4j2 revision, the production-to-test safety rule excludes
 the candidates known to break package-local access. The remaining aggregate was
-validated by applying it to a disposable clean worktree and running the full
-reactor compile with tests skipped; final pipeline verification still runs after
-application.
+validated by applying it to a disposable clean worktree and running Maven
+verification; final pipeline verification still runs after application.

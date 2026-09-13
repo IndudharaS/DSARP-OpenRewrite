@@ -25,9 +25,11 @@ unresolved-symbol failure previously observed after moving `AppenderWrapper`.
 Move Class is also rejected when its fully qualified type name appears in
 non-Java metadata or a resource path such as `META-INF/services`. `ChangeType`
 updates Java references but cannot safely migrate all service registrations,
-reflection configuration, or resource contracts. Isolated validation now runs
-directly affected Java tests after compilation, catching behavioural failures
-such as a ServiceLoader returning no providers before aggregation.
+reflection configuration, or resource contracts. Isolated validation runs
+directly affected Java tests when a rewrite changes tests. For production
+changes it runs tests in the affected Maven modules with their reactor
+dependencies, or the full reactor when module mapping is unavailable. A
+tests-skipped build alone is never reported as validated.
 The non-Java metadata corpus is read once per generation run and reused for all
 candidates; repository files are not rescanned for every prediction.
 Public production classes are not emitted for expensive validation unless the
@@ -69,6 +71,29 @@ Move Class resolution considers reciprocal dependencies first and then one-way
 semantic/import dependencies. The latter broadens the search for safe internal
 types in hub-like and unstable-dependency smells without weakening module,
 source-set, metadata, destination-conflict, or original-package dependency gates.
+
+Ranked refactoring labels are attempted in order, so an unresolved Move Method
+can fall back to a lower-ranked Move Class. The manifest retains each attempted
+label and outcome. A prediction may produce multiple concrete candidates;
+`prediction_id` identifies their parent prediction and `candidate_id` uniquely
+identifies validation worktrees, logs, batching, and aggregate decisions.
+
+Candidates are validated in a global safety, severity, model, and structural
+priority order. Individually successful candidates are then added cumulatively
+in clean worktrees. A candidate that breaks the accepted aggregate is excluded
+and recorded in `aggregate-conflicts.json` instead of failing the entire run.
+
+Every repository stage writes a contract under `stage-state/` containing its
+successful status, revision, worktree-state digest, timestamp, and required
+artifact hashes. Resume verifies the predecessor contract. Later stages also
+require `applied-candidates.json` to agree with the actual rewrite worktree, so
+a stale validation report cannot masquerade as an applied refactoring.
+
+Arcan comparison reports resolved, introduced, and unchanged instances for
+package cycles, class cycles, hub-like dependencies, and unstable dependencies.
+For validated Move Class changes, compiled-class population compatibility is
+checked against expected source/destination class paths; unexpected class-path
+changes make the comparison non-causal.
 
 ## Assigned Logging-Log4j2 revision
 

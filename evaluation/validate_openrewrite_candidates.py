@@ -10,6 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from openrewrite.compatibility_profiles import PROFILE_DIRECTORY, compatibility_strategy
+
 
 def run(
     command: list[str],
@@ -100,6 +102,18 @@ def changed_test_selectors(changed_files: list[str]) -> list[str]:
     return list(dict.fromkeys(selectors))
 
 
+def affected_maven_modules(repository: Path, changed_files: list[str]) -> list[str]:
+    """Map changed source/resource paths to Maven reactor modules."""
+    modules: list[str] = []
+    for value in changed_files:
+        normalized = value.replace(os.sep, "/").lstrip("/")
+        prefix = normalized.split("/src/", 1)[0] if "/src/" in normalized else ""
+        module = prefix or "."
+        if (repository / module / "pom.xml").is_file() and module not in modules:
+            modules.append(module)
+    return modules
+
+
 def classify_failure(log: Path, fallback: str) -> tuple[str, str]:
     """Turn Maven/OpenRewrite output into a useful, stable failure category."""
     text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
@@ -119,11 +133,10 @@ def classify_failure(log: Path, fallback: str) -> tuple[str, str]:
 
 
 def has_compatibility_strategy(record: dict[str, object], profile: str) -> bool:
-    return (
-        profile == "log4j2"
-        and record.get("source_type")
-        == "org.apache.logging.log4j.core.appender.rolling.FileSize"
-    )
+    destination = record.get("destination_type") or record.get("destination_class")
+    return compatibility_strategy(
+        profile, str(record.get("source_type") or ""), str(destination or "")
+    ) is not None
 
 
 def api_impact(record: dict[str, object]) -> str:
@@ -138,7 +151,7 @@ def api_impact(record: dict[str, object]) -> str:
     return "unknown_api"
 
 
-def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int, int]:
+def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int, int, float, float, str]:
     """Prioritize safer API changes before public or semantically unknown changes."""
     impact_order = {
         "internal_only": 0,
@@ -154,7 +167,10 @@ def candidate_priority(record: dict[str, object]) -> tuple[int, int, int, int, i
         impact_order.get(api_impact(record), 5),
         severity_order.get(str(record.get("severity")), 3),
         -int(record.get("severity_score") or 0),
-        int(record["prediction_id"]),
+        int(record.get("model_rank") or 999),
+        -float(record.get("model_score") or 0.0),
+        -float(record.get("structural_score") or 0.0),
+        str(record.get("candidate_id") or f"p{record['prediction_id']}-c1"),
     )
 
 
@@ -165,7 +181,8 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--rewrite-runner", required=True, type=Path)
     parser.add_argument("--java-home", required=True, type=Path)
-    parser.add_argument("--compatibility-profile", choices=("none", "log4j2"), default="none")
+    profile_names = ["none", *(path.stem for path in sorted(PROFILE_DIRECTORY.glob("*.json")))]
+    parser.add_argument("--compatibility-profile", choices=profile_names, default="none")
     parser.add_argument(
         "--allow-risky-candidates", action="store_true",
         help=("execute high-risk public-API candidates in isolated worktrees; "
@@ -243,9 +260,12 @@ def main() -> None:
               f"(prediction {record['prediction_id']}, severity {record.get('severity', 'unknown')})",
               flush=True)
         prediction = int(record["prediction_id"])
-        worktree = worktrees / f"prediction-{prediction:04d}"
+        candidate_id = str(record.get("candidate_id") or f"p{prediction}-c1")
+        safe_candidate_id = "".join(character if character.isalnum() or character in "-_" else "_"
+                                    for character in candidate_id)
+        worktree = worktrees / f"candidate-{safe_candidate_id}"
         recipe = generated / str(record["recipe_file"])
-        log_dir = output / "logs" / f"prediction-{prediction:04d}"
+        log_dir = output / "logs" / f"candidate-{safe_candidate_id}"
         if (not args.allow_risky_candidates
                 and api_impact(record) in {"protected_api", "public_method", "public_class"}
                 and not has_compatibility_strategy(
@@ -282,14 +302,14 @@ def main() -> None:
             format_status = 1
             verify_status = 1
             test_status = 1
+            test_scope = "not_run"
             changed_files = source_changes(worktree) if rewrite == 0 else []
             changed = bool(changed_files)
             if changed:
 
                 # FileSize is a published Log4j2 API. Its move is valid only with the
                 # compatibility facade supplied by the experiment runner.
-                if (args.compatibility_profile == "log4j2" and
-                        record["source_type"] == "org.apache.logging.log4j.core.appender.rolling.FileSize"):
+                if has_compatibility_strategy(record, args.compatibility_profile):
                     compatibility_status = run([
                         str(args.rewrite_runner.resolve()), "--repository", str(worktree),
                         "--java-home", str(args.java_home.resolve()), "--recipe", str(recipe),
@@ -310,25 +330,38 @@ def main() -> None:
                         )
                         format_status = 0
                 if format_status == 0:
+                    changed_files = source_changes(worktree)
                     verify_status = run(
                         ["./mvnw", "-DskipTests", "verify"],
                         cwd=worktree, log=log_dir / "verify.log", env=environment,
                     )
                 selectors = changed_test_selectors(changed_files)
                 if verify_status == 0 and selectors:
+                    test_scope = "changed_test_classes"
                     test_status = run(
                         ["./mvnw", f"-Dtest={','.join(selectors)}",
                          "-Dsurefire.failIfNoSpecifiedTests=false", "-DforkCount=1", "test"],
                         cwd=worktree, log=log_dir / "affected-tests.log", env=environment,
                     )
                 elif verify_status == 0:
-                    test_status = 0
+                    modules = affected_maven_modules(worktree, changed_files)
+                    test_command = ["./mvnw"]
+                    if modules and modules != ["."]:
+                        test_command += ["-pl", ",".join(modules), "-am"]
+                        test_scope = "affected_maven_modules:" + ",".join(modules)
+                    else:
+                        test_scope = "full_reactor"
+                    test_command += ["-DforkCount=1", "test"]
+                    test_status = run(
+                        test_command, cwd=worktree,
+                        log=log_dir / "affected-tests.log", env=environment,
+                    )
 
             if (rewrite == 0 and changed and compatibility_status == 0 and format_status == 0
                     and verify_status == 0 and test_status == 0):
                 status, reason = "validated", "OpenRewrite application, formatting, Maven verification, and affected tests passed"
                 category = "validated"
-                diagnostic_log = log_dir / ("affected-tests.log" if changed_test_selectors(changed_files) else "verify.log")
+                diagnostic_log = log_dir / "affected-tests.log"
                 validated.append(record)
             elif rewrite != 0:
                 diagnostic_log = log_dir / "runner-console.log"
@@ -357,11 +390,14 @@ def main() -> None:
             "validation_reason": reason,
             "diagnostic_log": str(diagnostic_log.relative_to(output)),
             "changed_files": changed_files,
+            "test_scope": test_scope if added == 0 else "not_run",
         })
 
-    executed_ids = {int(record["prediction_id"]) for record in executed_candidates}
+    executed_ids = {str(record.get("candidate_id") or f"p{record['prediction_id']}-c1")
+                    for record in executed_candidates}
     for position, record in enumerate(candidates):
-        if int(record["prediction_id"]) in executed_ids:
+        identity = str(record.get("candidate_id") or f"p{record['prediction_id']}-c1")
+        if identity in executed_ids:
             continue
         results.append({
             **record,
@@ -371,8 +407,87 @@ def main() -> None:
             "validation_reason": "candidate was deferred by the configured maximum batch count",
             "diagnostic_log": "",
             "changed_files": [],
+            "test_scope": "not_run",
         })
 
+    # Individually valid rewrites can interact. Rebuild an isolated cumulative
+    # worktree for each proposed addition and retain only candidates whose
+    # combined state still passes Maven verification.
+    cumulative_validated: list[dict[str, object]] = list(validated) if len(validated) <= 1 else []
+    aggregate_conflicts: list[dict[str, object]] = []
+    for candidate in validated if len(validated) > 1 else []:
+        trial = cumulative_validated + [candidate]
+        trial_id = str(candidate.get("candidate_id") or candidate["prediction_id"])
+        cumulative_worktree = worktrees / f"aggregate-{trial_id}"
+        cumulative_log = output / "aggregate-validation" / f"candidate-{trial_id}"
+        added = run(["git", "-C", str(repository), "worktree", "add", "--detach",
+                     str(cumulative_worktree), "HEAD"], log=cumulative_log / "worktree.log")
+        apply_status = added
+        failed_record: dict[str, object] | None = None
+        if added == 0:
+            for record in trial:
+                recipe = generated / str(record["recipe_file"])
+                identity = str(record.get("candidate_id") or record["prediction_id"])
+                apply_status = run([
+                    str(args.rewrite_runner.resolve()), "--repository", str(cumulative_worktree),
+                    "--java-home", str(args.java_home.resolve()), "--recipe", str(recipe),
+                    "--active-recipe", str(record["recipe_name"]),
+                    "--results-dir", str(cumulative_log / f"rewrite-{identity}"),
+                    "--log-dir", str(cumulative_log), "--mode", "apply",
+                ], log=cumulative_log / f"apply-{identity}.log")
+                if apply_status == 0 and has_compatibility_strategy(record, args.compatibility_profile):
+                    apply_status = run([
+                        str(args.rewrite_runner.resolve()), "--repository", str(cumulative_worktree),
+                        "--java-home", str(args.java_home.resolve()), "--recipe", str(recipe),
+                        "--active-recipe", str(record["recipe_name"]),
+                        "--results-dir", str(cumulative_log / f"rewrite-{identity}"),
+                        "--log-dir", str(cumulative_log), "--mode", "compatibility",
+                    ], log=cumulative_log / f"compatibility-{identity}.log")
+                if apply_status != 0:
+                    failed_record = record
+                    break
+            if apply_status == 0 and uses_spotless(cumulative_worktree):
+                apply_status = run(["./mvnw", "-DskipTests", "spotless:apply"],
+                                   cwd=cumulative_worktree,
+                                   log=cumulative_log / "spotless.log", env=environment)
+            if apply_status == 0:
+                apply_status = run(["./mvnw", "-DskipTests", "verify"],
+                                   cwd=cumulative_worktree,
+                                   log=cumulative_log / "verify.log", env=environment)
+            run(["git", "-C", str(repository), "worktree", "remove", "--force",
+                 str(cumulative_worktree)])
+        if apply_status == 0:
+            cumulative_validated.append(candidate)
+        else:
+            conflict = {
+                "candidate_id": candidate.get("candidate_id", candidate.get("prediction_id")),
+                "prediction_id": candidate.get("prediction_id"),
+                "conflicts_with": [row.get("candidate_id", row.get("prediction_id"))
+                                   for row in cumulative_validated],
+                "failed_while_applying": (
+                    failed_record.get("candidate_id", failed_record.get("prediction_id"))
+                    if failed_record else None
+                ),
+                "reason": "candidate failed cumulative application or Maven verification",
+                "log_directory": str(cumulative_log.relative_to(output)),
+            }
+            aggregate_conflicts.append(conflict)
+            candidate_identity = str(candidate.get("candidate_id") or
+                                     f"p{candidate['prediction_id']}-c1")
+            for result in results:
+                result_identity = str(result.get("candidate_id") or
+                                      f"p{result['prediction_id']}-c1")
+                if result_identity == candidate_identity:
+                    result["validation_status"] = "aggregate_conflict"
+                    result["failure_category"] = "aggregate_interaction"
+                    result["validation_reason"] = conflict["reason"]
+                    break
+    validated = cumulative_validated
+    (output / "aggregate-conflicts.json").write_text(json.dumps({
+        "accepted_candidate_ids": [row.get("candidate_id", row.get("prediction_id"))
+                                   for row in validated],
+        "conflicts": aggregate_conflicts,
+    }, indent=2) + "\n", encoding="utf-8")
     (output / "validated-candidates.yml").write_text(aggregate(validated), encoding="utf-8")
     status_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
@@ -410,7 +525,7 @@ def main() -> None:
     }
     (output / "validation-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     with (output / "validation-report.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = ["prediction_id", "severity", "severity_score", "batch_number",
+        fields = ["candidate_id", "prediction_id", "severity", "severity_score", "batch_number",
                   "candidate_origin",
                   "refactoring_kind", "analysis_source", "source_type", "destination_type",
                   "source_member", "source_signature", "destination_class",
@@ -419,7 +534,7 @@ def main() -> None:
                   "candidate_score", "risk_level", "validation_status", "failure_category",
                   "api_impact", "public_types_affected", "public_members_affected",
                   "compatibility_strategy", "automatic_execution_allowed",
-                  "validation_reason", "diagnostic_log", "changed_files"]
+                  "validation_reason", "diagnostic_log", "changed_files", "test_scope"]
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader(); writer.writerows(results)
     print(json.dumps({key: value for key, value in report.items() if key != "records"}, indent=2))

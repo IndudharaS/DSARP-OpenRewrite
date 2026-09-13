@@ -11,7 +11,7 @@ from pathlib import Path
 
 from openrewrite.candidate_models import JavaMethod, MethodDependency
 from openrewrite.generate_recipes import generate
-from openrewrite.resolvers.move_method import resolve_move_method
+from openrewrite.resolvers.move_method import is_jdk_type, resolve_move_method
 
 
 def method(**overrides) -> JavaMethod:
@@ -44,6 +44,16 @@ class MoveMethodResolverTests(unittest.TestCase):
             MethodDependency("outside.C", "outside", "method_call", 8),
         )
         self.assertEqual(self.resolve([method(dependencies=dependencies)]).status, "unresolved_destination")
+
+    def test_jdk_dependencies_do_not_reduce_project_affinity(self):
+        dependencies = (
+            MethodDependency("example.right.B", "example.right", "method_call", 3),
+            MethodDependency("java.util.List", "java.util", "type_reference", 20),
+            MethodDependency("java.time.Instant", "java.time", "type_reference", 20),
+        )
+        candidate = self.resolve([method(dependencies=dependencies)])
+        self.assertEqual(candidate.status, "ready_for_dry_run")
+        self.assertTrue(is_jdk_type("java.util.List"))
 
     def test_source_state_heavy_method_is_rejected(self):
         self.assertEqual(self.resolve([method(source_state_references=10)]).status, "unsafe_source_state")
@@ -139,6 +149,51 @@ class MoveMethodManifestTests(unittest.TestCase):
         try:
             record = json.loads((output / "manifest.json").read_text())["records"][0]
             self.assertEqual(record["status"], "test_boundary")
+        finally:
+            temporary.cleanup()
+
+    def test_unresolved_move_method_falls_back_to_move_class(self):
+        temporary = tempfile.TemporaryDirectory()
+        try:
+            root = Path(temporary.name); repository = root / "repo"
+            sources = {
+                "module/src/main/java/example/left/A.java": "package example.left; class A {}",
+                "module/src/main/java/example/right/B.java": "package example.right; class B {}",
+                "module/src/main/java/example/right/UsesA.java":
+                    "package example.right;\nimport example.left.A;\nclass UsesA {}",
+            }
+            for relative, source in sources.items():
+                path = repository / relative; path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source, encoding="utf-8")
+            predictions = root / "predictions.csv"
+            predictions.write_text(
+                "architecture_smell,affected_elements,suggestions\n"
+                'Cyclic Dependency,example.left|example.right,"Move Method (0.9) | Move Class (0.8)"\n',
+                encoding="utf-8",
+            )
+            semantic = root / "semantic.json"
+            semantic.write_text(json.dumps({"methods": [{
+                "sourceClass": "example.left.A", "sourceMethod": "helper",
+                "signature": "helper()", "sourcePackage": "example.left",
+                "path": "module/src/main/java/example/left/A.java", "module": "module",
+                "sourceSet": "main", "visibility": "public", "static": True,
+                "abstract": False, "native": False, "synchronized": False,
+                "sourceStateReferences": 0,
+                "dependencies": [{"targetType": "outside.C", "targetPackage": "outside",
+                                  "kind": "method_call", "count": 4}],
+            }]}), encoding="utf-8")
+            output = root / "output"
+            with contextlib.redirect_stdout(io.StringIO()):
+                generate(Namespace(repository=repository, predictions=predictions,
+                    output_dir=output, smell_column="architecture_smell",
+                    elements_column="affected_elements", suggestions_column="suggestions",
+                    elements_separator="|", severity_categories="high,medium,low",
+                    semantic_analysis=semantic))
+            record = json.loads((output / "manifest.json").read_text())["records"][0]
+            self.assertEqual(record["status"], "ready_for_dry_run")
+            self.assertEqual(record["refactoring_kind"], "Move Class")
+            self.assertEqual(record["model_rank"], 2)
+            self.assertIn("Move Method: unresolved_method", record["attempted_labels"])
         finally:
             temporary.cleanup()
 

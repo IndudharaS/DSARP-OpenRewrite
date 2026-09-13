@@ -1,0 +1,10 @@
+{
+  "project": "logging-log4j2",
+  "compatibility_strategies": [
+    {
+      "source_type": "org.apache.logging.log4j.core.appender.rolling.FileSize",
+      "destination_type": "org.apache.logging.log4j.core.appender.rolling.action.FileSize",
+      "strategy": "file_size_facade"
+    }
+  ]
+}

@@ -14,11 +14,12 @@ import csv
 import json
 import re
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
 from openrewrite.candidate_models import JavaMethod
+from openrewrite.compatibility_profiles import any_compatibility_strategy
 from openrewrite.resolvers.move_method import resolve_move_method
 from openrewrite.resolvers.move_class import rank_semantic_move_classes
 from openrewrite.semantic_analysis import load_methods
@@ -51,6 +52,7 @@ class JavaType:
 
 @dataclass
 class ManifestRecord:
+    candidate_id: str
     prediction_id: int
     architecture_smell: str
     affected_elements: list[str]
@@ -88,6 +90,7 @@ class ManifestRecord:
     compatibility_strategy: str = "unknown"
     automatic_execution_allowed: bool = False
     candidate_origin: str = "model_prediction"
+    attempted_labels: list[str] | None = None
 
 
 def set_api_impact(record: ManifestRecord, *, public: bool, member_level: bool) -> None:
@@ -110,12 +113,7 @@ def set_api_impact(record: ManifestRecord, *, public: bool, member_level: bool) 
 
 
 def has_builtin_move_class_compatibility(source: JavaType, destination_type: str) -> bool:
-    return (
-        source.qualified_name
-        == "org.apache.logging.log4j.core.appender.rolling.FileSize"
-        and destination_type
-        == "org.apache.logging.log4j.core.appender.rolling.action.FileSize"
-    )
+    return any_compatibility_strategy(source.qualified_name, destination_type) is not None
 
 
 def move_class_preference(source: JavaType, destination_type: str) -> int:
@@ -168,6 +166,57 @@ def java_files(repository: Path) -> Iterable[Path]:
             yield path
 
 
+def java_code_only(text: str) -> str:
+    """Mask comments and literals while preserving offsets and line breaks."""
+    result = list(text)
+    index = 0
+    state = "code"
+    quote = ""
+    while index < len(text):
+        pair = text[index:index + 2]
+        if state == "code" and pair in {"//", "/*"}:
+            state = "line_comment" if pair == "//" else "block_comment"
+            result[index:index + 2] = "  "
+            index += 2
+            continue
+        if state == "code" and text.startswith('"""', index):
+            state = "text_block"; result[index:index + 3] = "   "; index += 3; continue
+        if state == "code" and text[index] in {'"', "'"}:
+            state = "literal"; quote = text[index]; result[index] = " "; index += 1; continue
+        if state == "line_comment":
+            if text[index] == "\n":
+                state = "code"
+            else:
+                result[index] = " "
+            index += 1
+            continue
+        if state == "block_comment":
+            if pair == "*/":
+                result[index:index + 2] = "  "; state = "code"; index += 2; continue
+            if text[index] != "\n":
+                result[index] = " "
+            index += 1
+            continue
+        if state == "text_block":
+            if text.startswith('"""', index):
+                result[index:index + 3] = "   "; state = "code"; index += 3; continue
+            if text[index] != "\n":
+                result[index] = " "
+            index += 1
+            continue
+        if state == "literal":
+            if text[index] == "\\" and index + 1 < len(text):
+                result[index:index + 2] = "  "; index += 2; continue
+            if text[index] == quote:
+                state = "code"
+            if text[index] != "\n":
+                result[index] = " "
+            index += 1
+            continue
+        index += 1
+    return "".join(result)
+
+
 def parse_repository(repository: Path) -> tuple[dict[str, JavaType], dict[str, set[str]]]:
     types: dict[str, JavaType] = {}
     packages: dict[str, set[str]] = defaultdict(set)
@@ -177,31 +226,31 @@ def parse_repository(repository: Path) -> tuple[dict[str, JavaType], dict[str, s
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        package_match = PACKAGE_RE.search(text)
-        type_match = TYPE_RE.search(text)
-        if not package_match or not type_match:
+        code = java_code_only(text)
+        package_match = PACKAGE_RE.search(code)
+        if not package_match:
             continue
         package = package_match.group(1)
-        simple_name = type_match.group(1)
-        qualified_name = f"{package}.{simple_name}"
-        imports = tuple(dict.fromkeys(IMPORT_RE.findall(text)))
+        imports = tuple(dict.fromkeys(IMPORT_RE.findall(code)))
         relative = path.relative_to(repository)
         parts = relative.parts
         src_index = parts.index("src") if "src" in parts else -1
         module = str(Path(*parts[:src_index])) if src_index > 0 else "."
         source_set = parts[src_index + 1] if src_index >= 0 and len(parts) > src_index + 1 else "unknown"
-        java_type = JavaType(
-            qualified_name=qualified_name,
-            package=package,
-            simple_name=simple_name,
-            path=str(relative),
-            imports=imports,
-            module=module,
-            source_set=source_set,
-            is_public=bool(re.search(r"\bpublic\b", type_match.group(0))),
-        )
-        types[qualified_name] = java_type
-        packages[package].add(qualified_name)
+        for type_match in TYPE_RE.finditer(code):
+            # Nested/member declarations have a positive brace depth.
+            prefix = code[:type_match.start()]
+            if prefix.count("{") != prefix.count("}"):
+                continue
+            simple_name = type_match.group(1)
+            qualified_name = f"{package}.{simple_name}"
+            java_type = JavaType(
+                qualified_name=qualified_name, package=package, simple_name=simple_name,
+                path=str(relative), imports=imports, module=module, source_set=source_set,
+                is_public=bool(re.search(r"\bpublic\b", type_match.group(0))),
+            )
+            types[qualified_name] = java_type
+            packages[package].add(qualified_name)
 
     return types, packages
 
@@ -281,7 +330,8 @@ def original_package_dependencies(
     # A conservative token scan catches original-package peer types referenced
     # anywhere in the source, including fields, annotations and class headers.
     try:
-        text = (repository / source.path).read_text(encoding="utf-8", errors="replace")
+        text = java_code_only((repository / source.path).read_text(
+            encoding="utf-8", errors="replace"))
     except OSError:
         return tuple(sorted(peers))
     for candidate in types.values():
@@ -455,20 +505,42 @@ def generate(args: argparse.Namespace) -> None:
     candidate_count = 0
 
     with args.predictions.open(newline="", encoding="utf-8-sig") as handle:
-        rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames or []
+        raw_rows = list(reader)
 
     required = {args.smell_column, args.elements_column, args.suggestions_column}
-    missing = required.difference(rows[0].keys() if rows else set())
+    missing = required.difference(fieldnames)
     if missing:
         raise SystemExit(f"Prediction CSV is missing columns: {sorted(missing)}")
 
-    for index, row in enumerate(rows, start=1):
+    selected_severities = {
+        item for item in getattr(args, "severity_categories", "high,medium,low").split(",")
+        if item
+    }
+
+    def row_priority(item: tuple[int, dict[str, str]]) -> tuple[int, int, float, int]:
+        original_index, row = item
+        affected_count = len({part.strip() for part in row[args.elements_column].split(
+            args.elements_separator) if part.strip()})
+        severity, severity_score, _ = classify_severity(row[args.smell_column], affected_count)
+        suggestions = ranked_suggestions(row[args.suggestions_column])
+        supported = [(rank, score or 0.0) for rank, (label, score) in enumerate(suggestions, 1)
+                     if label in {"Move Class", "Move Method"}]
+        best_rank, best_score = supported[0] if supported else (999, 0.0)
+        severity_order = {"high": 0, "medium": 1, "low": 2}
+        return (severity_order[severity], best_rank, -best_score, original_index)
+
+    # Resolve ownership using evidence priority instead of arbitrary CSV order.
+    rows = sorted(enumerate(raw_rows, start=1), key=row_priority)
+
+    for index, row in rows:
+        additional_records: list[ManifestRecord] = []
         affected = [item.strip() for item in row[args.elements_column].split(args.elements_separator) if item.strip()]
         affected_set = set(affected)
         severity, severity_score, severity_reason = classify_severity(
             row[args.smell_column], len(affected_set)
         )
-        selected_severities = set(getattr(args, "severity_categories", "high,medium,low").split(","))
         ranked_predictions = ranked_suggestions(row[args.suggestions_column])
         top_refactoring = ranked_predictions[0][0] if ranked_predictions else None
         first_supported = next(((rank, name, score) for rank, (name, score) in
@@ -482,8 +554,27 @@ def generate(args: argparse.Namespace) -> None:
             ),
             None,
         )
-        suggestion = supported[1] if supported else ""
+        attempted_labels: list[str] = []
+        method_candidate = None
+        if first_supported and first_supported[1] == "Move Method":
+            method_candidate = resolve_move_method(
+                semantic_methods, affected_set, set(types), claimed_methods
+            )
+            method_status = method_candidate.status if method_candidate else "unresolved_method"
+            if method_candidate:
+                source_java_type = types.get(method_candidate.source_class)
+                target_java_type = types.get(method_candidate.destination_class)
+                if source_java_type and target_java_type and source_java_type.module != target_java_type.module:
+                    method_status = "cross_module"
+                elif (source_java_type and target_java_type and source_java_type.source_set == "main"
+                      and target_java_type.source_set != "main"):
+                    method_status = "test_boundary"
+            attempted_labels.append(f"Move Method: {method_status}")
+            if method_status != "ready_for_dry_run" and supported:
+                first_supported = supported
+        suggestion = first_supported[1] if first_supported else ""
         record = ManifestRecord(
+            candidate_id=f"p{index}-c1",
             prediction_id=index,
             architecture_smell=row[args.smell_column],
             affected_elements=affected,
@@ -505,6 +596,7 @@ def generate(args: argparse.Namespace) -> None:
             severity_score=severity_score,
             severity_reason=severity_reason,
             refactoring_kind=first_supported[1] if first_supported else None,
+            attempted_labels=attempted_labels,
         )
 
         unknown_packages = sorted(affected_set.difference(packages))
@@ -523,7 +615,9 @@ def generate(args: argparse.Namespace) -> None:
         elif len(affected_set) < 2:
             record.reason = f"{first_supported[1]} requires at least two affected packages"
         elif first_supported[1] == "Move Method":
-            candidate = resolve_move_method(semantic_methods, affected_set, set(types), claimed_methods)
+            candidate = method_candidate or resolve_move_method(
+                semantic_methods, affected_set, set(types), claimed_methods
+            )
             record.predicted_refactoring = "Move Method"
             record.model_rank = first_supported[0]
             record.model_score = first_supported[2]
@@ -569,6 +663,7 @@ def generate(args: argparse.Namespace) -> None:
                     record.compatibility_strategy = "not_required"
                     record.automatic_execution_allowed = True
                 if candidate_status == "ready_for_dry_run":
+                    record.attempted_labels = [*attempted_labels, "Move Method: ready_for_dry_run"]
                     recipe_name = f"generated.architecture.P{index}_MoveMethod_{safe_fragment(candidate.source_member)}"
                     recipe_file = recipe_dir / f"prediction-{index:04d}-move-method-{safe_fragment(candidate.source_member).lower()}.yml"
                     recipe_file.write_text(move_method_recipe_yaml(
@@ -580,6 +675,8 @@ def generate(args: argparse.Namespace) -> None:
                     record.recipe_name = recipe_name
                     record.recipe_file = str(recipe_file.relative_to(output_dir))
         else:
+            if attempted_labels:
+                record.attempted_labels = [*attempted_labels, "Move Class: attempted fallback"]
             semantic_ranked = rank_semantic_move_classes(semantic_methods, affected_set)
             if semantic_ranked:
                 ranked = [(types[source], destination, score, reason)
@@ -677,6 +774,41 @@ def generate(args: argparse.Namespace) -> None:
                 record.reason = reason
                 record.recipe_name = recipe_name
                 record.recipe_file = str(recipe_file.relative_to(output_dir))
+                additional_number = 2
+                for extra in safe_ranked:
+                    if extra == selected or extra[0].qualified_name in claimed_sources:
+                        continue
+                    extra_source, extra_package, extra_score, extra_reason = extra
+                    extra_destination = f"{extra_package}.{extra_source.simple_name}"
+                    extra_recipe_name = (
+                        f"generated.architecture.P{index}_C{additional_number}_Move_"
+                        f"{safe_fragment(extra_source.simple_name)}"
+                    )
+                    extra_recipe_file = recipe_dir / (
+                        f"prediction-{index:04d}-candidate-{additional_number}-move-"
+                        f"{safe_fragment(extra_source.simple_name).lower()}.yml"
+                    )
+                    extra_recipe_file.write_text(recipe_yaml(
+                        extra_recipe_name, extra_source.qualified_name, extra_destination,
+                        f"Generated from prediction {index}: {extra_reason}.",
+                    ), encoding="utf-8")
+                    extra_record = replace(
+                        record, candidate_id=f"p{index}-c{additional_number}",
+                        source_type=extra_source.qualified_name,
+                        destination_type=extra_destination,
+                        source_package=extra_source.package,
+                        destination_package=extra_package,
+                        candidate_score=extra_score, structural_score=extra_score,
+                        risk_level=("test_only" if extra_source.source_set == "test"
+                                    else "high_public_api" if extra_source.is_public else "normal"),
+                        reason=extra_reason, recipe_name=extra_recipe_name,
+                        recipe_file=str(extra_recipe_file.relative_to(output_dir)),
+                    )
+                    set_move_class_api_impact(extra_record, extra_source, extra_destination)
+                    additional_records.append(extra_record)
+                    claimed_sources[extra_source.qualified_name] = index
+                    candidate_count += 1
+                    additional_number += 1
             elif safe_ranked:
                 owners = sorted({claimed_sources[item[0].qualified_name] for item in safe_ranked})
                 record.status = "duplicate"
@@ -725,13 +857,14 @@ def generate(args: argparse.Namespace) -> None:
                     record.reason = "ranked moves were cross-module, production-to-test, or destination conflicts"
 
         records.append(record)
+        records.extend(additional_records)
 
     if getattr(args, "include_curated_filesize", False):
         source_name = "org.apache.logging.log4j.core.appender.rolling.FileSize"
         destination_name = "org.apache.logging.log4j.core.appender.rolling.action.FileSize"
         source = types.get(source_name)
         if source and destination_name not in types:
-            index = len(rows) + 1
+            index = len(raw_rows) + 1
             recipe_name = "generated.architecture.Curated_Move_FileSize"
             recipe_file = recipe_dir / "curated-move-filesize.yml"
             recipe_file.write_text(recipe_yaml(
@@ -739,6 +872,7 @@ def generate(args: argparse.Namespace) -> None:
                 "Evidence-backed Log4j2 FileSize move with the built-in public-API compatibility facade.",
             ), encoding="utf-8")
             records.append(ManifestRecord(
+                candidate_id="curated-filesize",
                 prediction_id=index,
                 architecture_smell="Curated evidence-backed candidate",
                 affected_elements=[source.package, destination_name.rsplit(".", 1)[0]],

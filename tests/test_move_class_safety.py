@@ -11,11 +11,24 @@ from pathlib import Path
 from unittest import mock
 
 import openrewrite.generate_recipes as recipe_generator
-from openrewrite.generate_recipes import generate
+from openrewrite.generate_recipes import generate, parse_repository
 from evaluation.validate_openrewrite_candidates import candidate_priority
 
 
 class MoveClassSafetyTests(unittest.TestCase):
+    def test_repository_inventory_includes_all_top_level_types_but_not_nested_types(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            source = repository / "module/src/main/java/example/Types.java"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                "package example;\nclass First { class Nested {} }\nclass Second {}\n"
+                "// class CommentOnly {}\n",
+                encoding="utf-8",
+            )
+            types, _ = parse_repository(repository)
+            self.assertEqual(set(types), {"example.First", "example.Second"})
+
     def run_generator(self, left_path: str, right_path: str, extra: dict[str, str] | None = None,
                       prediction_count: int = 1):
         temporary = tempfile.TemporaryDirectory(); root = Path(temporary.name); repo = root / "repo"
@@ -198,6 +211,47 @@ class MoveClassSafetyTests(unittest.TestCase):
             self.assertEqual(record["status"], "ready_for_dry_run")
             self.assertEqual(record["source_type"], "example.right.B")
             self.assertIn("one-way dependency candidate", record["reason"])
+        finally:
+            temporary.cleanup()
+
+    def test_all_safe_candidates_have_unique_parented_candidate_ids(self):
+        temporary, manifest = self.run_generator(
+            "module/src/main/java/example/left/A.java",
+            "module/src/main/java/example/right/B.java",
+            {
+                "module/src/main/java/example/left/A.java":
+                    "package example.left; class A {}",
+                "module/src/main/java/example/right/B.java":
+                    "package example.right; class B {}",
+                "module/src/main/java/example/left/LeftImporter.java":
+                    "package example.left;\nimport example.right.B;\nclass LeftImporter {}",
+                "module/src/main/java/example/right/RightImporter.java":
+                    "package example.right;\nimport example.left.A;\nclass RightImporter {}",
+            },
+        )
+        try:
+            ready = [row for row in manifest["records"] if row["status"] == "ready_for_dry_run"]
+            self.assertEqual(len(ready), 2)
+            self.assertEqual({row["prediction_id"] for row in ready}, {1})
+            self.assertEqual({row["candidate_id"] for row in ready}, {"p1-c1", "p1-c2"})
+        finally:
+            temporary.cleanup()
+
+    def test_header_only_predictions_create_empty_manifest(self):
+        temporary = tempfile.TemporaryDirectory(); root = Path(temporary.name)
+        repo = root / "repo"; repo.mkdir()
+        predictions = root / "predictions.csv"
+        predictions.write_text("architecture_smell,affected_elements,suggestions\n")
+        output = root / "out"
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                generate(Namespace(repository=repo, predictions=predictions, output_dir=output,
+                    smell_column="architecture_smell", elements_column="affected_elements",
+                    suggestions_column="suggestions", elements_separator="|",
+                    severity_categories="high,medium,low", semantic_analysis=None))
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["record_count"], 0)
+            self.assertEqual(manifest["selected_severity_categories"], ["high", "low", "medium"])
         finally:
             temporary.cleanup()
 
