@@ -15,9 +15,19 @@ while (($#)); do
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
-[[ -x "$REPOSITORY/mvnw" && -n "$OUTPUT" ]] || { echo "Repository with mvnw and --output are required" >&2; exit 2; }
+[[ -d "$REPOSITORY" && -n "$OUTPUT" ]] || { echo "Repository and --output are required" >&2; exit 2; }
+if [[ -x "$REPOSITORY/mvnw" ]]; then
+  MAVEN=("$REPOSITORY/mvnw")
+elif [[ -n "${DSARP_MAVEN:-}" && -x "$DSARP_MAVEN" ]]; then
+  MAVEN=("$DSARP_MAVEN")
+elif command -v mvn >/dev/null 2>&1; then
+  MAVEN=(mvn)
+else
+  echo "No Maven executable is available for repository without mvnw: $REPOSITORY" >&2
+  exit 1
+fi
 export JAVA_HOME="$JAVA_HOME_VALUE"
-"$REPOSITORY/mvnw" -q -f "$PROJECT_ROOT/openrewrite-java/pom.xml" -DskipTests install
+"${MAVEN[@]}" -q -f "$PROJECT_ROOT/openrewrite-java/pom.xml" -DskipTests install
 
 # OpenRewrite's aggregator resolves reactor SNAPSHOT dependencies before it
 # visits all modules. Install the unchanged target reactor first so analysis
@@ -25,13 +35,13 @@ export JAVA_HOME="$JAVA_HOME_VALUE"
 # isolated Maven repository.
 (
   cd "$REPOSITORY"
-  ./mvnw -DskipTests install
+  "${MAVEN[@]}" -DskipTests install
 )
 analysis_marker="$(mktemp)"
 trap 'rm -f "$analysis_marker"' EXIT
 (
   cd "$REPOSITORY"
-  ./mvnw -DskipTests \
+  "${MAVEN[@]}" -DskipTests \
     -Drewrite.recipeArtifactCoordinates=dsarp.rewrite:dsarp-openrewrite-recipes:1.0.0 \
     -Drewrite.activeRecipes=dsarp.rewrite.analysis.DependencyAnalysisRecipe \
     -Drewrite.exportDatatables=true \

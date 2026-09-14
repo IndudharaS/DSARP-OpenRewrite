@@ -16,7 +16,8 @@ usage() {
 Usage: scripts/run_openrewrite_maven.sh --repository PATH --java-home PATH \
   --recipe FILE --active-recipe NAME [options]
 
-Generic OpenRewrite executor for a Maven project that has an executable mvnw.
+Generic OpenRewrite executor. A repository mvnw is preferred; DSARP_MAVEN or
+the system mvn command is used when the repository has no wrapper.
 
 Options:
   --results-dir PATH          Output directory for the dry-run patch.
@@ -45,7 +46,6 @@ done
   usage >&2; exit 2;
 }
 [[ "$MODE" =~ ^(dry-run|apply|all)$ ]] || { echo "Invalid --mode: $MODE" >&2; exit 2; }
-[[ -x "$REPOSITORY/mvnw" ]] || { echo "Maven wrapper missing: $REPOSITORY/mvnw" >&2; exit 1; }
 [[ -x "$JAVA_HOME_VALUE/bin/java" ]] || { echo "Java missing: $JAVA_HOME_VALUE/bin/java" >&2; exit 1; }
 [[ -f "$RECIPE" ]] || { echo "Recipe missing: $RECIPE" >&2; exit 1; }
 
@@ -56,8 +56,19 @@ RESULTS_DIR="${RESULTS_DIR:-$REPOSITORY/target/rewrite-results}"
 LOG_DIR="${LOG_DIR:-$REPOSITORY/target/rewrite-logs}"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR"
 
+if [[ -x "$REPOSITORY/mvnw" ]]; then
+  MAVEN=("$REPOSITORY/mvnw")
+elif [[ -n "${DSARP_MAVEN:-}" && -x "$DSARP_MAVEN" ]]; then
+  MAVEN=("$DSARP_MAVEN")
+elif command -v mvn >/dev/null 2>&1; then
+  MAVEN=(mvn)
+else
+  echo "No Maven executable is available for repository without mvnw: $REPOSITORY" >&2
+  exit 1
+fi
+
 if grep -q 'dsarp.rewrite.MoveMethod' "$RECIPE"; then
-  "$REPOSITORY/mvnw" -q -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/openrewrite-java/pom.xml" -DskipTests install
+  "${MAVEN[@]}" -q -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/openrewrite-java/pom.xml" -DskipTests install
   RECIPE_ARTIFACT=(-Drewrite.recipeArtifactCoordinates=dsarp.rewrite:dsarp-openrewrite-recipes:1.0.0)
 fi
 
@@ -65,7 +76,7 @@ run_rewrite() {
   local goal="$1" log_file="$2"
   (
     cd "$REPOSITORY"
-    JAVA_HOME="$JAVA_HOME_VALUE" ./mvnw -DskipTests \
+    JAVA_HOME="$JAVA_HOME_VALUE" "${MAVEN[@]}" -DskipTests \
       "${RECIPE_ARTIFACT[@]}" \
       -Drewrite.configLocation="$RECIPE" \
       -Drewrite.activeRecipes="$ACTIVE_RECIPE" \

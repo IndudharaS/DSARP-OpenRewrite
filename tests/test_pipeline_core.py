@@ -4,6 +4,7 @@ import csv
 import contextlib
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -15,7 +16,8 @@ from evaluation.summarize_arcan import comparison, cycles
 from evaluation.validate_openrewrite_candidates import (affected_maven_modules,
                                                          changed_test_selectors,
                                                          classify_failure,
-                                                         has_compatibility_strategy)
+                                                         has_compatibility_strategy,
+                                                         maven_command)
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
 from openrewrite.compatibility_profiles import profile_for_target
 from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
@@ -259,8 +261,19 @@ class EvidenceTests(unittest.TestCase):
 
     def test_semantic_analysis_prepares_target_reactor_before_dry_run(self) -> None:
         script = (Path(__file__).parents[1] / "scripts" / "run_semantic_analysis.sh").read_text()
-        self.assertLess(script.index('./mvnw -DskipTests install'),
+        self.assertLess(script.index('"${MAVEN[@]}" -DskipTests install'),
                         script.index('rewrite-maven-plugin:6.12.0:dryRunNoFork'))
+
+    def test_maven_command_falls_back_when_repository_has_no_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "repository"
+            repository.mkdir()
+            configured = root / "mvn"
+            configured.write_text("#!/bin/sh\nexit 0\n")
+            configured.chmod(0o755)
+            with mock.patch.dict(os.environ, {"DSARP_MAVEN": str(configured)}):
+                self.assertEqual(maven_command(repository), [str(configured.resolve())])
 
     def test_pipeline_short_circuits_expensive_post_validation_stages(self) -> None:
         script = (Path(__file__).parents[1] / "scripts" / "run_log4j2_pipeline.sh").read_text()
@@ -278,7 +291,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn(
             "Rollover completion verification failure", script)
         self.assertIn("complete_reactor_after_accepted_test_failure", script)
-        self.assertIn('./mvnw -DskipTests verify', script)
+        self.assertIn('maven_for "$repository" -DskipTests verify', script)
 
     def test_mining_commit_limit_is_validated(self) -> None:
         self.assertEqual(validate_max_commits({}), 500)

@@ -223,6 +223,21 @@ require_command() {
   command -v "$1" >/dev/null || { echo "Required command missing: $1" >&2; exit 1; }
 }
 
+maven_for() {
+  local repository="$1"
+  shift
+  if [[ -x "$repository/mvnw" ]]; then
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "$@")
+  elif [[ -n "${DSARP_MAVEN:-}" && -x "$DSARP_MAVEN" ]]; then
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" "$DSARP_MAVEN" "$@")
+  elif command -v mvn >/dev/null 2>&1; then
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" mvn "$@")
+  else
+    echo "No Maven executable is available for repository without mvnw: $repository" >&2
+    return 1
+  fi
+}
+
 has_validated_changes() {
   local report="$RESULTS_DIR/openrewrite-validation/validation-report.json"
   local applied="$RESULTS_DIR/openrewrite-validation/applied-candidates.json"
@@ -251,7 +266,7 @@ PY
 complete_reactor_after_accepted_test_failure() {
   local repository="$1" log_file="$2"
   echo "Completing the Maven reactor after the accepted test-only failure." | tee -a "$log_file"
-  (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw -DskipTests verify) \
+  maven_for "$repository" -DskipTests verify \
     2>&1 | tee -a "$log_file"
 }
 
@@ -275,7 +290,7 @@ run_expected_spring_failure() {
   fi
   attempt_log="${log_file%.log}-attempt.log"
   set +e
-  (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "${verify_arguments[@]}") \
+  maven_for "$repository" "${verify_arguments[@]}" \
     2>&1 | tee "$attempt_log"
   status=${PIPESTATUS[0]}
   set -e
@@ -284,6 +299,11 @@ run_expected_spring_failure() {
   if ((status == 0)); then
     echo "Full verification passed."
     return
+  fi
+
+  if [[ "$PROFILE" != "log4j2" ]]; then
+    echo "Maven verification failed for $PROJECT_NAME. See $attempt_log" >&2
+    return "$status"
   fi
 
   if grep -q "Log4j2SpringBootInitTest.testEnvironment" "$attempt_log" \
@@ -313,10 +333,10 @@ run_expected_spring_failure() {
     echo "Full verification failed only in the allowlisted timing-sensitive tests; rerunning both in isolation." \
       | tee "$retry_log"
     set +e
-    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
+    maven_for "$repository" \
       -pl log4j-core-test -am \
       -Dtest=RollingAppenderDirectWriteTempCompressedFilePatternTest,MutableThreadContextMapFilterTest \
-      -Dsurefire.failIfNoSpecifiedTests=false -DforkCount=1 test) \
+      -Dsurefire.failIfNoSpecifiedTests=false -DforkCount=1 test \
       2>&1 | tee -a "$retry_log"
     retry_status=${PIPESTATUS[0]}
     set -e
@@ -359,10 +379,10 @@ PY
     printf 'Baseline verification failed; retrying only these failed tests once:\n%s\n' \
       "$failed_test_selectors" | tee "$dynamic_retry_log"
     set +e
-    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
+    maven_for "$repository" \
       -pl log4j-core-test -am \
       "-Dtest=$failed_test_selectors" \
-      -Dsurefire.failIfNoSpecifiedTests=false -DforkCount=1 test) \
+      -Dsurefire.failIfNoSpecifiedTests=false -DforkCount=1 test \
       2>&1 | tee -a "$dynamic_retry_log"
     dynamic_retry_status=${PIPESTATUS[0]}
     set -e
@@ -955,7 +975,7 @@ fi
 
 if should_run baseline; then
   heading "Stage: baseline"
-  require_file "$BASE_REPO/mvnw"
+  maven_for "$BASE_REPO" --version >/dev/null
   run_expected_spring_failure "$BASE_REPO" "$LOG_DIR/baseline-verify.log"
   "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" baseline-csv \
     "$BASELINE_CSV_DIR" --output "$RESULTS_DIR/arcan-supplied-baseline-summary.json" >/dev/null
@@ -1073,10 +1093,10 @@ if should_run focused_test; then
   if ! has_validated_changes; then
     echo "Skipped: no candidate passed isolated validation and the repository is unchanged."
   elif [[ "$PROFILE" == "log4j2" ]]; then
-    (cd "$REWRITE_REPO" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
+    maven_for "$REWRITE_REPO" \
       -pl log4j-core-test -am \
       -Dtest=org.apache.logging.log4j.core.appender.rolling.FileSizeTest,org.apache.logging.log4j.core.appender.rolling.action.FileSizeTest \
-      -Dsurefire.failIfNoSpecifiedTests=false test) | tee "$LOG_DIR/focused-tests.log"
+      -Dsurefire.failIfNoSpecifiedTests=false test | tee "$LOG_DIR/focused-tests.log"
   else
     echo "No project-specific focused test configured; isolated and full verification remain enabled."
   fi
@@ -1088,12 +1108,12 @@ if should_run format; then
   if ! has_validated_changes; then
     echo "Skipped: no validated source changes require formatting."
   elif [[ "$PROFILE" == "log4j2" ]]; then
-    (cd "$REWRITE_REPO" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
+    maven_for "$REWRITE_REPO" \
       -pl log4j-api,log4j-core,log4j-1.2-api -am \
-      -DskipTests spotless:apply) | tee "$LOG_DIR/spotless-apply.log"
+      -DskipTests spotless:apply | tee "$LOG_DIR/spotless-apply.log"
   elif rg -q 'spotless-maven-plugin' "$REWRITE_REPO" -g 'pom.xml'; then
-    (cd "$REWRITE_REPO" && JAVA_HOME="$JAVA_HOME_17" ./mvnw \
-      -DskipTests spotless:apply) | tee "$LOG_DIR/spotless-apply.log"
+    maven_for "$REWRITE_REPO" \
+      -DskipTests spotless:apply | tee "$LOG_DIR/spotless-apply.log"
   else
     echo "Spotless is not configured; formatting stage skipped."
   fi

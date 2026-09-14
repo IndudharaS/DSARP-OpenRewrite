@@ -35,6 +35,23 @@ export DSARP_ARCAN_HOME="$TOOLS_ROOT/arcan-1.2.1/distribution/arcan-1.2.1"
 MAVEN_REPOSITORY="${MAVEN_REPOSITORY:-$PROJECT_SPACE/maven-repository/jobs/$SLURM_JOB_ID}"
 mkdir -p "$MAVEN_REPOSITORY"
 export MAVEN_OPTS="-Dmaven.repo.local=$MAVEN_REPOSITORY -Xmx12g"
+
+# Some supported repositories (including the pinned Tika revision) do not ship
+# mvnw. Provide a pinned, job-local Maven fallback while still preferring a
+# repository's own wrapper when it exists.
+MAVEN_VERSION="3.9.9"
+MAVEN_ARCHIVE="$MAVEN_REPOSITORY/apache-maven-$MAVEN_VERSION-bin.tar.gz"
+MAVEN_HOME="$MAVEN_REPOSITORY/apache-maven-$MAVEN_VERSION"
+if [[ ! -x "$MAVEN_HOME/bin/mvn" ]]; then
+  curl -fsSL \
+    "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$MAVEN_VERSION/apache-maven-$MAVEN_VERSION-bin.tar.gz" \
+    -o "$MAVEN_ARCHIVE"
+  printf '%s  %s\n' \
+    'a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b' \
+    "$MAVEN_ARCHIVE" | sha512sum --check --status
+  tar -xzf "$MAVEN_ARCHIVE" -C "$MAVEN_REPOSITORY"
+fi
+export DSARP_MAVEN="$MAVEN_HOME/bin/mvn"
 # Noctua scratch enforces project-group/setgid semantics, so Log4j's test that
 # asserts arbitrary owner/group/mode changes is not valid on this filesystem.
 # The pipeline passes this through Surefire's additive excludes file so the

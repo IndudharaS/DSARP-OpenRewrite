@@ -1,8 +1,9 @@
 # Generic repository pipeline
 
 `run_generic_pipeline.sh` runs the complete workflow for a Maven-based Java
-system at an exact Git revision. It requires a Maven wrapper (`mvnw`) in the
-target repository.
+system at an exact Git revision. It prefers a repository Maven wrapper (`mvnw`)
+and otherwise uses `DSARP_MAVEN` or a system `mvn` executable. Noctua jobs
+provide a checksum-verified, pinned Maven fallback automatically.
 
 ## Required input
 

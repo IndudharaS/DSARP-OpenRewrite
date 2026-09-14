@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,20 @@ def run(
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(process.stdout, encoding="utf-8")
     return process.returncode
+
+
+def maven_command(repository: Path) -> list[str]:
+    """Prefer the repository wrapper and otherwise use the configured Maven."""
+    wrapper = repository / "mvnw"
+    if wrapper.is_file() and os.access(wrapper, os.X_OK):
+        return [str(wrapper.resolve())]
+    configured = os.environ.get("DSARP_MAVEN", "").strip()
+    if configured and Path(configured).is_file() and os.access(configured, os.X_OK):
+        return [str(Path(configured).resolve())]
+    system_maven = shutil.which("mvn")
+    if system_maven:
+        return [system_maven]
+    raise SystemExit(f"No Maven executable is available for repository without mvnw: {repository}")
 
 
 def aggregate(records: list[dict[str, object]]) -> str:
@@ -245,7 +260,7 @@ def main() -> None:
         prepare_status = 0
     else:
         prepare_status = run(
-            ["./mvnw", "-DskipTests", "install"],
+            maven_command(repository) + ["-DskipTests", "install"],
             cwd=repository,
             log=prepare_log,
             env=environment,
@@ -328,7 +343,7 @@ def main() -> None:
                 if compatibility_status == 0:
                     if uses_spotless(worktree):
                         format_status = run(
-                            ["./mvnw", "-DskipTests", "spotless:apply"],
+                            maven_command(worktree) + ["-DskipTests", "spotless:apply"],
                             cwd=worktree, log=log_dir / "spotless.log", env=environment,
                         )
                     else:
@@ -339,20 +354,20 @@ def main() -> None:
                 if format_status == 0:
                     changed_files = source_changes(worktree)
                     verify_status = run(
-                        ["./mvnw", "-DskipTests", "verify"],
+                        maven_command(worktree) + ["-DskipTests", "verify"],
                         cwd=worktree, log=log_dir / "verify.log", env=environment,
                     )
                 selectors = changed_test_selectors(changed_files)
                 if verify_status == 0 and selectors:
                     test_scope = "changed_test_classes"
                     test_status = run(
-                        ["./mvnw", f"-Dtest={','.join(selectors)}",
+                        maven_command(worktree) + [f"-Dtest={','.join(selectors)}",
                          "-Dsurefire.failIfNoSpecifiedTests=false", "-DforkCount=1", "test"],
                         cwd=worktree, log=log_dir / "affected-tests.log", env=environment,
                     )
                 elif verify_status == 0:
                     modules = affected_maven_modules(worktree, changed_files)
-                    test_command = ["./mvnw"]
+                    test_command = maven_command(worktree)
                     if modules and modules != ["."]:
                         test_command += ["-pl", ",".join(modules), "-am"]
                         test_scope = "affected_maven_modules:" + ",".join(modules)
@@ -454,11 +469,11 @@ def main() -> None:
                     failed_record = record
                     break
             if apply_status == 0 and uses_spotless(cumulative_worktree):
-                apply_status = run(["./mvnw", "-DskipTests", "spotless:apply"],
+                apply_status = run(maven_command(aggregate_worktree) + ["-DskipTests", "spotless:apply"],
                                    cwd=cumulative_worktree,
                                    log=cumulative_log / "spotless.log", env=environment)
             if apply_status == 0:
-                apply_status = run(["./mvnw", "-DskipTests", "verify"],
+                apply_status = run(maven_command(aggregate_worktree) + ["-DskipTests", "verify"],
                                    cwd=cumulative_worktree,
                                    log=cumulative_log / "verify.log", env=environment)
             run(["git", "-C", str(repository), "worktree", "remove", "--force",
