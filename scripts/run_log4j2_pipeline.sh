@@ -283,6 +283,15 @@ run_expected_spring_failure() {
   local known_flake_only=1
   local failure_lines=()
   local verify_arguments=(verify)
+  if [[ "$PROFILE" != "log4j2" ]]; then
+    # Large third-party reactors commonly contain environment-dependent
+    # integration tests (Docker, sockets, subprocess launchers, cloud services).
+    # Baseline/final gates need complete compiled bytecode for Arcan; candidate
+    # validation separately runs the tests affected by each proposed change.
+    verify_arguments=(-DskipTests verify)
+    echo "Generic repository verification: compile the full reactor; affected tests run per candidate." \
+      | tee -a "$log_file"
+  fi
   if [[ -n "${DSARP_MAVEN_TEST_EXCLUDES:-}" ]]; then
     echo "Additional Maven verification exclusions: $DSARP_MAVEN_TEST_EXCLUDES" | tee -a "$log_file"
   fi

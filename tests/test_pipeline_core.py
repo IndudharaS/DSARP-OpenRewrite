@@ -19,7 +19,7 @@ from evaluation.validate_openrewrite_candidates import (affected_maven_modules,
                                                          has_compatibility_strategy,
                                                          maven_command)
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
-from openrewrite.compatibility_profiles import load_profile, profile_for_target
+from openrewrite.compatibility_profiles import profile_for_target
 from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
                           result_summary,
                           validate_batch_options, validate_max_commits,
@@ -80,9 +80,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(profile_for_target(
             "custom", "https://github.com/apache/logging-log4j2.git/"), "log4j2")
         self.assertEqual(profile_for_target(
-            "tika", "https://github.com/apache/tika.git"), "tika")
-        self.assertEqual(load_profile("tika")["maven_test_excludes"],
-                         ["**/PipesForkParserTest.*"])
+            "tika", "https://github.com/apache/tika.git"), "none")
 
     def test_production_changes_map_to_affected_maven_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -295,6 +293,14 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("complete_reactor_after_accepted_test_failure", script)
         self.assertIn('maven_for "$repository" -DskipTests verify', script)
 
+    def test_generic_reactor_builds_all_bytecode_before_candidate_tests(self) -> None:
+        script = (Path(__file__).parents[1] / "scripts" / "run_log4j2_pipeline.sh").read_text()
+        self.assertIn('if [[ "$PROFILE" != "log4j2" ]]', script)
+        self.assertIn('verify_arguments=(-DskipTests verify)', script)
+        validator = (Path(__file__).parents[1] / "evaluation" /
+                     "validate_openrewrite_candidates.py").read_text()
+        self.assertIn('test_command += ["-DforkCount=1", "test"]', validator)
+
     def test_mining_commit_limit_is_validated(self) -> None:
         self.assertEqual(validate_max_commits({}), 500)
         self.assertEqual(validate_max_commits({"maxCommitsPerRepository": "2000"}), 2000)
@@ -422,8 +428,8 @@ class EvidenceTests(unittest.TestCase):
                     "baselineFiles": tika_csvs, "severityCategories": ["high"],
                     "batchSize": 10, "startBatch": 1, "maxBatches": 1,
                 })
-            self.assertEqual(tika["compatibilityProfile"], "tika")
-            self.assertEqual(submit.call_args.kwargs["env"]["PROFILE"], "tika")
+            self.assertEqual(tika["compatibilityProfile"], "none")
+            self.assertEqual(submit.call_args.kwargs["env"]["PROFILE"], "generic")
             self.assertEqual(submit.call_args.kwargs["env"]["INCLUDE_CURATED_FILESIZE"], "0")
 
 
