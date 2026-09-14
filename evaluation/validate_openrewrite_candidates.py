@@ -40,14 +40,25 @@ def maven_command(repository: Path) -> list[str]:
     """Prefer the repository wrapper and otherwise use the configured Maven."""
     wrapper = repository / "mvnw"
     if wrapper.is_file() and os.access(wrapper, os.X_OK):
-        return [str(wrapper.resolve())]
-    configured = os.environ.get("DSARP_MAVEN", "").strip()
-    if configured and Path(configured).is_file() and os.access(configured, os.X_OK):
-        return [str(Path(configured).resolve())]
-    system_maven = shutil.which("mvn")
-    if system_maven:
-        return [system_maven]
-    raise SystemExit(f"No Maven executable is available for repository without mvnw: {repository}")
+        command = [str(wrapper.resolve())]
+    else:
+        configured = os.environ.get("DSARP_MAVEN", "").strip()
+        if configured and Path(configured).is_file() and os.access(configured, os.X_OK):
+            command = [str(Path(configured).resolve())]
+        else:
+            system_maven = shutil.which("mvn")
+            if not system_maven:
+                raise SystemExit(
+                    f"No Maven executable is available for repository without mvnw: {repository}"
+                )
+            command = [system_maven]
+    excludes = os.environ.get("DSARP_MAVEN_TEST_EXCLUDES_FILE", "").strip()
+    if excludes:
+        command.append(f"-Dsurefire.excludesFile={excludes}")
+    fork_count = os.environ.get("DSARP_MAVEN_FORK_COUNT", "").strip()
+    if fork_count:
+        command.append(f"-DforkCount={fork_count}")
+    return command
 
 
 def aggregate(records: list[dict[str, object]]) -> str:

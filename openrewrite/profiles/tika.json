@@ -1,0 +1,7 @@
+{
+  "project": "tika",
+  "systems": ["tika"],
+  "repository_urls": ["https://github.com/apache/tika.git"],
+  "maven_test_excludes": ["**/PipesForkParserTest.*"],
+  "compatibility_strategies": []
+}

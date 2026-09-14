@@ -19,7 +19,7 @@ from evaluation.validate_openrewrite_candidates import (affected_maven_modules,
                                                          has_compatibility_strategy,
                                                          maven_command)
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
-from openrewrite.compatibility_profiles import profile_for_target
+from openrewrite.compatibility_profiles import load_profile, profile_for_target
 from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
                           result_summary,
                           validate_batch_options, validate_max_commits,
@@ -80,7 +80,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(profile_for_target(
             "custom", "https://github.com/apache/logging-log4j2.git/"), "log4j2")
         self.assertEqual(profile_for_target(
-            "tika", "https://github.com/apache/tika.git"), "none")
+            "tika", "https://github.com/apache/tika.git"), "tika")
+        self.assertEqual(load_profile("tika")["maven_test_excludes"],
+                         ["**/PipesForkParserTest.*"])
 
     def test_production_changes_map_to_affected_maven_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -420,8 +422,8 @@ class EvidenceTests(unittest.TestCase):
                     "baselineFiles": tika_csvs, "severityCategories": ["high"],
                     "batchSize": 10, "startBatch": 1, "maxBatches": 1,
                 })
-            self.assertEqual(tika["compatibilityProfile"], "none")
-            self.assertEqual(submit.call_args.kwargs["env"]["PROFILE"], "generic")
+            self.assertEqual(tika["compatibilityProfile"], "tika")
+            self.assertEqual(submit.call_args.kwargs["env"]["PROFILE"], "tika")
             self.assertEqual(submit.call_args.kwargs["env"]["INCLUDE_CURATED_FILESIZE"], "0")
 
 

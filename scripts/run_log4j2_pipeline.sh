@@ -225,13 +225,20 @@ require_command() {
 
 maven_for() {
   local repository="$1"
+  local policy_arguments=()
   shift
+  if [[ -n "${DSARP_MAVEN_TEST_EXCLUDES_FILE:-}" ]]; then
+    policy_arguments+=("-Dsurefire.excludesFile=$DSARP_MAVEN_TEST_EXCLUDES_FILE")
+  fi
+  if [[ -n "${DSARP_MAVEN_FORK_COUNT:-}" ]]; then
+    policy_arguments+=("-DforkCount=$DSARP_MAVEN_FORK_COUNT")
+  fi
   if [[ -x "$repository/mvnw" ]]; then
-    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "$@")
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" ./mvnw "${policy_arguments[@]}" "$@")
   elif [[ -n "${DSARP_MAVEN:-}" && -x "$DSARP_MAVEN" ]]; then
-    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" "$DSARP_MAVEN" "$@")
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" "$DSARP_MAVEN" "${policy_arguments[@]}" "$@")
   elif command -v mvn >/dev/null 2>&1; then
-    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" mvn "$@")
+    (cd "$repository" && JAVA_HOME="$JAVA_HOME_17" mvn "${policy_arguments[@]}" "$@")
   else
     echo "No Maven executable is available for repository without mvnw: $repository" >&2
     return 1
@@ -277,15 +284,9 @@ run_expected_spring_failure() {
   local failure_lines=()
   local verify_arguments=(verify)
   if [[ -n "${DSARP_MAVEN_TEST_EXCLUDES:-}" ]]; then
-    excludes_file="$RUN_ROOT/.maven-surefire-excludes"
-    printf '%s\n' "$DSARP_MAVEN_TEST_EXCLUDES" | tr ',' '\n' >"$excludes_file"
-    verify_arguments+=(
-      "-Dsurefire.excludesFile=$excludes_file"
-    )
     echo "Additional Maven verification exclusions: $DSARP_MAVEN_TEST_EXCLUDES" | tee -a "$log_file"
   fi
   if [[ -n "${DSARP_MAVEN_FORK_COUNT:-}" ]]; then
-    verify_arguments+=("-DforkCount=$DSARP_MAVEN_FORK_COUNT")
     echo "Maven verification fork count: $DSARP_MAVEN_FORK_COUNT" | tee -a "$log_file"
   fi
   attempt_log="${log_file%.log}-attempt.log"
@@ -623,6 +624,30 @@ if ((!FULL && !PREDICTIONS_EXPLICIT)) && [[ ! -f "$PREDICTIONS" ]]; then
 fi
 
 mkdir -p "$RESULTS_DIR" "$LOG_DIR" "$RUN_ROOT/notebooks"
+
+if [[ "$PROFILE" != "generic" ]]; then
+  profile_policy="$($PYTHON - "$PROJECT_ROOT/openrewrite/profiles/$PROFILE.json" <<'PY'
+import json, sys
+from pathlib import Path
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(",".join(str(value) for value in profile.get("maven_test_excludes", [])))
+print(str(profile.get("maven_fork_count", "")))
+PY
+)"
+  profile_excludes="$(printf '%s\n' "$profile_policy" | sed -n '1p')"
+  profile_fork_count="$(printf '%s\n' "$profile_policy" | sed -n '2p')"
+  if [[ -n "$profile_excludes" ]]; then
+    DSARP_MAVEN_TEST_EXCLUDES="${DSARP_MAVEN_TEST_EXCLUDES:+$DSARP_MAVEN_TEST_EXCLUDES,}$profile_excludes"
+    export DSARP_MAVEN_TEST_EXCLUDES
+  fi
+  if [[ -n "$profile_fork_count" ]]; then
+    export DSARP_MAVEN_FORK_COUNT="$profile_fork_count"
+  fi
+fi
+if [[ -n "${DSARP_MAVEN_TEST_EXCLUDES:-}" ]]; then
+  export DSARP_MAVEN_TEST_EXCLUDES_FILE="$RUN_ROOT/.maven-surefire-excludes"
+  printf '%s\n' "$DSARP_MAVEN_TEST_EXCLUDES" | tr ',' '\n' >"$DSARP_MAVEN_TEST_EXCLUDES_FILE"
+fi
 
 if should_run preflight; then
   heading "Stage: preflight"

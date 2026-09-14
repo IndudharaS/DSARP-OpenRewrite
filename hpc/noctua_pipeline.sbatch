@@ -52,15 +52,6 @@ if [[ ! -x "$MAVEN_HOME/bin/mvn" ]]; then
   tar -xzf "$MAVEN_ARCHIVE" -C "$MAVEN_REPOSITORY"
 fi
 export DSARP_MAVEN="$MAVEN_HOME/bin/mvn"
-# Noctua scratch enforces project-group/setgid semantics, so Log4j's test that
-# asserts arbitrary owner/group/mode changes is not valid on this filesystem.
-# The pipeline passes this through Surefire's additive excludes file so the
-# project's execution-specific exclusions (including OverflowTest) stay intact.
-export DSARP_MAVEN_TEST_EXCLUDES="**/FileAppenderPermissionsTest.*"
-# Several Log4j 1.x compatibility tests write the same target/temp.A* files.
-# A single Surefire fork prevents cross-process races on high-core-count nodes.
-export DSARP_MAVEN_FORK_COUNT="1"
-
 SYSTEM="${SYSTEM:-logging-log4j2}"
 REPOSITORY_URL="${REPOSITORY_URL:-https://github.com/apache/logging-log4j2.git}"
 VERSION_ID="${VERSION_ID:-4f474b32751f4ccad67424ca585612584440cd63}"
