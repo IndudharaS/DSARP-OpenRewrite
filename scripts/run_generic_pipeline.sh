@@ -47,8 +47,8 @@ Inputs:
                             final_model directory; skip mining and training.
   --mining-cache-dir PATH   Override the shared RefactoringMiner cache folder.
   --remine                  Generate fresh shared mining output.
-  --profile PROFILE         generic or log4j2. Defaults to log4j2 for the
-                            logging-log4j2 preset and generic otherwise.
+  --profile PROFILE         Registered compatibility profile. Dashboard runs
+                            detect it from the system/repository automatically.
   --allow-risky-candidates  Experimentally execute public-API candidates in
                             isolated worktrees; Maven validation is still required.
   --include-curated-filesize
@@ -108,7 +108,11 @@ done
 if [[ -z "$PROFILE" ]]; then
   if [[ "$PROJECT_NAME" == "logging-log4j2" ]]; then PROFILE="log4j2"; else PROFILE="generic"; fi
 fi
-[[ "$PROFILE" =~ ^(generic|log4j2)$ ]] || { echo "Invalid profile: $PROFILE" >&2; exit 2; }
+[[ "$PROFILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid profile: $PROFILE" >&2; exit 2; }
+if [[ "$PROFILE" != "generic" && ! -f "$PROJECT_ROOT/openrewrite/profiles/$PROFILE.json" ]]; then
+  echo "Unknown compatibility profile: $PROFILE" >&2
+  exit 2
+fi
 if ((REUSE_PREDICTIONS)); then
   VERSION_KEY="$(printf '%s' "$VERSION_ID" | tr '[:upper:]' '[:lower:]')"
   PREDICTIONS="$PROJECT_ROOT/shared/pipeline-cache/$PROJECT_NAME/$VERSION_KEY/predictions.csv"

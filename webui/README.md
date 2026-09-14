@@ -58,9 +58,12 @@ Open <http://127.0.0.1:8765> and keep the terminal running. Stop the server with
 The server binds to `127.0.0.1` by default and accepts repository URLs and exact
 Git commit hashes. Uploaded files are limited to 50 MB each. The target project
 must be Maven-based and include an executable `mvnw`.
-The built-in Logging-Log4j2 selection enables its API-compatibility validation
-profile automatically; other presets and custom systems use the generic Maven
-OpenRewrite executor.
+The server selects registered API-compatibility profiles automatically from the
+system name or normalized repository URL. Logging-Log4j2 therefore receives its
+evidence-backed FileSize candidate without a UI checkbox. Repositories without
+a registered profile use the generic Maven/OpenRewrite executor and semantic
+candidate discovery; a project-specific candidate is never applied to an
+unrelated repository.
 
 ## Noctua HPC dashboard
 

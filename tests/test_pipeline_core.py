@@ -17,6 +17,7 @@ from evaluation.validate_openrewrite_candidates import (affected_maven_modules,
                                                          classify_failure,
                                                          has_compatibility_strategy)
 from openrewrite.generate_recipes import classify_severity, generate, ranked_suggestions
+from openrewrite.compatibility_profiles import profile_for_target
 from webui.server import (detect_stage, normalize_slurm_state, read_json_file,
                           result_summary,
                           validate_batch_options, validate_max_commits,
@@ -71,6 +72,14 @@ class SuggestionTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_compatibility_profile_is_selected_by_system_or_repository(self) -> None:
+        self.assertEqual(profile_for_target("logging-log4j2", "https://example.test/repo.git"),
+                         "log4j2")
+        self.assertEqual(profile_for_target(
+            "custom", "https://github.com/apache/logging-log4j2.git/"), "log4j2")
+        self.assertEqual(profile_for_target(
+            "tika", "https://github.com/apache/tika.git"), "none")
+
     def test_production_changes_map_to_affected_maven_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary)
@@ -370,8 +379,37 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["executionTarget"], "hpc")
             self.assertEqual(result["runName"], "Log4j2 prediction check")
             self.assertEqual(submit.call_args.kwargs["env"]["PIPELINE_MODE"], "reuse_predictions")
+            self.assertEqual(submit.call_args.kwargs["env"]["PROFILE"], "log4j2")
+            self.assertEqual(submit.call_args.kwargs["env"]["INCLUDE_CURATED_FILESIZE"], "1")
             self.assertEqual(submit.call_args.kwargs["env"]["STOP_STAGE"], "summary")
             self.assertEqual(submit.call_args.kwargs["env"]["MAX_COMMITS_PER_REPO"], "500")
+
+            tika_csvs = []
+            for name in ("component-metrics.csv", "smell-characteristics.csv", "smell-affects.csv"):
+                content = "project,versionId\ntika,697d7c0\n"
+                tika_csvs.append({
+                    "name": name,
+                    "data": __import__("base64").b64encode(content.encode()).decode(),
+                })
+            with (mock.patch.object(dashboard, "RUNS", runs),
+                  mock.patch.object(dashboard, "STATE", root / "state"),
+                  mock.patch.object(dashboard, "HPC_PROJECT_SPACE", root / "scratch"),
+                  mock.patch.object(dashboard, "HPC_RUNS_ROOT", root / "scratch" / "runs"),
+                  mock.patch.object(dashboard, "EXECUTION_MODE", "hpc"),
+                  mock.patch.object(dashboard, "hpc_available", return_value=True),
+                  mock.patch.object(dashboard, "latest_compatible_predictions", return_value=predictions),
+                  mock.patch.object(dashboard.subprocess, "run", return_value=completed) as submit):
+                tika = dashboard.start_hpc_run({
+                    "runName": "Tika generic check", "system": "tika",
+                    "repositoryUrl": "https://github.com/apache/tika.git",
+                    "versionId": "697d7c0", "mode": "latest_predictions",
+                    "includeCuratedFileSize": True,  # stale clients must be ignored
+                    "baselineFiles": tika_csvs, "severityCategories": ["high"],
+                    "batchSize": 10, "startBatch": 1, "maxBatches": 1,
+                })
+            self.assertEqual(tika["compatibilityProfile"], "none")
+            self.assertEqual(submit.call_args.kwargs["env"]["PROFILE"], "generic")
+            self.assertEqual(submit.call_args.kwargs["env"]["INCLUDE_CURATED_FILESIZE"], "0")
 
 
 if __name__ == "__main__":

@@ -62,9 +62,11 @@ scripts/run_generic_pipeline.sh \
   --clean
 ```
 
-The `logging-log4j2` system name automatically enables its registered
-compatibility profile. Add `--remine` only when intentionally rebuilding the
-shared training corpus.
+Dashboard runs automatically select a registered compatibility profile by
+system name or normalized repository URL. Repositories without one use safe
+generic candidate discovery and validation. A CLI run can select a registered
+profile explicitly with `--profile NAME`. Add `--remine` only when intentionally
+rebuilding the shared training corpus.
 
 ## Principal outputs
 

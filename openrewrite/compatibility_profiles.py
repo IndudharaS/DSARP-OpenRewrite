@@ -10,6 +10,10 @@ from pathlib import Path
 PROFILE_DIRECTORY = Path(__file__).with_name("profiles")
 
 
+def _normalize_repository(value: str) -> str:
+    return value.strip().lower().rstrip("/").removesuffix(".git")
+
+
 @lru_cache(maxsize=None)
 def load_profile(name: str) -> dict[str, object]:
     if name == "none":
@@ -41,3 +45,18 @@ def any_compatibility_strategy(
         if strategy:
             return strategy
     return None
+
+
+def profile_for_target(system: str, repository_url: str) -> str:
+    """Select a registered project profile, or ``none`` for an unknown repo."""
+    normalized_system = system.strip().lower()
+    normalized_repository = _normalize_repository(repository_url)
+    for path in sorted(PROFILE_DIRECTORY.glob("*.json")):
+        profile = load_profile(path.stem)
+        systems = {str(value).strip().lower() for value in profile.get("systems", [])}
+        repositories = {
+            _normalize_repository(str(value)) for value in profile.get("repository_urls", [])
+        }
+        if normalized_system in systems or normalized_repository in repositories:
+            return path.stem
+    return "none"

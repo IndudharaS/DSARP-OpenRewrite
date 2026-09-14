@@ -152,7 +152,11 @@ REWRITE_REPO="$RUN_ROOT/repositories/$PROJECT_NAME-openrewrite"
 if ((!PREDICTIONS_EXPLICIT)); then
   PREDICTIONS="$PROJECT_ROOT/shared/pipeline-cache/$PROJECT_NAME/$VERSION_ID/predictions.csv"
 fi
-[[ "$PROFILE" =~ ^(log4j2|generic)$ ]] || { echo "Invalid --profile: $PROFILE" >&2; exit 2; }
+[[ "$PROFILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid --profile: $PROFILE" >&2; exit 2; }
+if [[ "$PROFILE" != "generic" && ! -f "$PROJECT_ROOT/openrewrite/profiles/$PROFILE.json" ]]; then
+  echo "Unknown compatibility profile: $PROFILE" >&2
+  exit 2
+fi
 [[ "$SEVERITY_CATEGORIES" =~ ^(high|medium|low)(,(high|medium|low))*$ ]] || { echo "Invalid --severity-categories: $SEVERITY_CATEGORIES" >&2; exit 2; }
 [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || { echo "--batch-size must be a positive integer" >&2; exit 2; }
 [[ "$START_BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "--start-batch must be a positive integer" >&2; exit 2; }

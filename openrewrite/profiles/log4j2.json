@@ -1,5 +1,7 @@
 {
   "project": "logging-log4j2",
+  "systems": ["logging-log4j2", "log4j2"],
+  "repository_urls": ["https://github.com/apache/logging-log4j2.git"],
   "compatibility_strategies": [
     {
       "source_type": "org.apache.logging.log4j.core.appender.rolling.FileSize",

@@ -24,6 +24,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from openrewrite.compatibility_profiles import profile_for_target
+
 STATE = ROOT / "webui" / "state"
 RUNS = STATE / "runs"
 ASSETS = ROOT / "webui" / "static"
@@ -572,7 +577,7 @@ def shared_model_summary() -> dict:
 def submission_key(payload: dict) -> str:
     fields = {key: payload.get(key) for key in (
         "system", "repositoryUrl", "versionId", "executionTarget", "mode",
-        "freshMining", "allowRiskyCandidates", "includeCuratedFileSize", "severityCategories", "batchSize",
+        "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
         "startBatch", "maxBatches", "resumeRunId", "resumeStage", "stopStage",
         "workflowGoal", "maxCommitsPerRepository", "runName", "pretrainedModelDir",
     )}
@@ -612,9 +617,8 @@ def start_hpc_run(payload: dict) -> dict:
     pretrained_model = validate_pretrained_model(payload) if mode == "pretrained_model" else ""
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky = bool(payload.get("allowRiskyCandidates", False))
-    include_curated_filesize = bool(payload.get("includeCuratedFileSize", False))
-    if include_curated_filesize and system != "logging-log4j2":
-        raise ValueError("The curated FileSize experiment is available only for Logging-Log4j2")
+    compatibility_profile = profile_for_target(system, repository)
+    include_curated_filesize = compatibility_profile == "log4j2"
     resume_id = str(payload.get("resumeRunId", "")).strip()
     resume_stage = str(payload.get("resumeStage", "")).strip()
     if bool(resume_id) != bool(resume_stage):
@@ -671,7 +675,7 @@ def start_hpc_run(payload: dict) -> dict:
         "STOP_STAGE": stop_stage,
         "ALLOW_RISKY_CANDIDATES": "1" if allow_risky else "0",
         "INCLUDE_CURATED_FILESIZE": "1" if include_curated_filesize else "0",
-        "PROFILE": "log4j2" if system == "logging-log4j2" else "generic",
+        "PROFILE": compatibility_profile if compatibility_profile != "none" else "generic",
     })
     if resume_id:
         environment.update({"RESUME_RUN_ID": resume_id, "START_STAGE": resume_stage})
@@ -693,6 +697,7 @@ def start_hpc_run(payload: dict) -> dict:
         "id": run_id, "runName": run_name, "system": system, "repositoryUrl": repository, "versionId": version,
         "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "hpc", "freshMining": fresh_mining,
         "allowRiskyCandidates": allow_risky, "includeCuratedFileSize": include_curated_filesize,
+        "compatibilityProfile": compatibility_profile,
         "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
         "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
@@ -731,8 +736,9 @@ def start_run(payload: dict) -> dict:
     command = [str(PIPELINE), "--system", system, "--repository-url", repository,
                "--version-id", version, "--baseline-csv-dir", str(inputs / "baseline"),
                "--run-root", str(run_root)]
-    if system == "logging-log4j2":
-        command += ["--profile", "log4j2"]
+    compatibility_profile = profile_for_target(system, repository)
+    if compatibility_profile != "none":
+        command += ["--profile", compatibility_profile]
     mode = payload.get("mode", "full")
     pretrained_model = validate_pretrained_model(payload) if mode == "pretrained_model" else ""
     extra = payload.get("extraFile")
@@ -751,9 +757,7 @@ def start_run(payload: dict) -> dict:
         raise ValueError("Unknown run mode")
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky_candidates = bool(payload.get("allowRiskyCandidates", False))
-    include_curated_filesize = bool(payload.get("includeCuratedFileSize", False))
-    if include_curated_filesize and system != "logging-log4j2":
-        raise ValueError("The curated FileSize experiment is available only for Logging-Log4j2")
+    include_curated_filesize = compatibility_profile == "log4j2"
     severity_categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
     if fresh_mining:
         if mode != "full":
@@ -774,6 +778,7 @@ def start_run(payload: dict) -> dict:
             "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "local", "freshMining": fresh_mining,
             "allowRiskyCandidates": allow_risky_candidates,
             "includeCuratedFileSize": include_curated_filesize,
+            "compatibilityProfile": compatibility_profile,
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
             "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
