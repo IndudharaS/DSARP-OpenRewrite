@@ -313,6 +313,24 @@ class EvidenceTests(unittest.TestCase):
         validator = (Path(__file__).parents[1] / "evaluation" /
                      "validate_openrewrite_candidates.py").read_text()
         self.assertIn('test_command += ["-DforkCount=1", "test"]', validator)
+        self.assertIn('["-pl", ",".join(modules), "-am", "-amd"]', validator)
+
+    def test_semantic_analysis_has_dedicated_heap_and_visible_fallback(self) -> None:
+        hpc = (Path(__file__).parents[1] / "hpc" / "noctua_pipeline.sbatch").read_text()
+        pipeline = (Path(__file__).parents[1] / "scripts" /
+                    "run_log4j2_pipeline.sh").read_text()
+        self.assertIn("DSARP_SEMANTIC_MAVEN_OPTS", hpc)
+        self.assertIn("-Xmx28g", hpc)
+        self.assertIn('SEMANTIC_STATUS="$RESULTS_DIR/semantic-analysis/status.json"', pipeline)
+        self.assertIn('"fallback_used": True', pipeline)
+        self.assertIn('semantic_reason="java_heap_exhausted"', pipeline)
+
+    def test_candidate_evidence_is_archived_for_download(self) -> None:
+        validator = (Path(__file__).parents[1] / "evaluation" /
+                     "validate_openrewrite_candidates.py").read_text()
+        server = (Path(__file__).parents[1] / "webui" / "server.py").read_text()
+        self.assertIn('candidate-validation-evidence.zip', validator)
+        self.assertIn('results/openrewrite-validation/candidate-validation-evidence.zip', server)
 
     def test_mining_commit_limit_is_validated(self) -> None:
         self.assertEqual(validate_max_commits({}), 500)

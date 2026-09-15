@@ -776,7 +776,7 @@ PY
     "$JUPYTER" nbconvert --execute --to notebook \
       --ExecutePreprocessor.timeout=-1 \
       --output "$RUN_ROOT/notebooks/csv-parser.executed.ipynb" \
-      "$INPUT_NOTEBOOK" | tee "$LOG_DIR/csv-parser.log"
+      "$INPUT_NOTEBOOK" 2>&1 | tee "$LOG_DIR/csv-parser.log"
     require_file "$MODEL_INPUTS"
     "$PYTHON" - "$MODEL_INPUTS" <<'PY'
 import csv, sys
@@ -907,7 +907,7 @@ if should_run training; then
     "$JUPYTER" nbconvert --execute --to notebook \
       --ExecutePreprocessor.timeout=-1 \
       --output "$RUN_ROOT/notebooks/training.executed.ipynb" \
-      "$TRAIN_NOTEBOOK" | tee "$LOG_DIR/training.log"
+      "$TRAIN_NOTEBOOK" 2>&1 | tee "$LOG_DIR/training.log"
     require_file "$MODEL_DIR/test_set_prediction_comparison.csv"
       "$PYTHON" "$PROJECT_ROOT/ml/evaluate_rankings.py" \
         --comparison-csv "$MODEL_DIR/test_set_prediction_comparison.csv" \
@@ -1036,14 +1036,37 @@ if should_run rewrite; then
   fi
 
   SEMANTIC_OUTPUT="$RESULTS_DIR/semantic-analysis/method-dependencies.json"
+  SEMANTIC_STATUS="$RESULTS_DIR/semantic-analysis/status.json"
   semantic_arguments=()
   semantic_ready=0
+  mkdir -p "$(dirname "$SEMANTIC_STATUS")"
   if "$SEMANTIC_ANALYZER" --repository "$REWRITE_REPO" --output "$SEMANTIC_OUTPUT" \
       --java-home "$JAVA_HOME_17" 2>&1 | tee "$LOG_DIR/semantic-analysis.log"; then
     semantic_arguments=(--semantic-analysis "$SEMANTIC_OUTPUT")
     semantic_ready=1
+    "$PYTHON" - "$SEMANTIC_STATUS" "$SEMANTIC_OUTPUT" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "status": "complete", "fallback_used": False,
+    "method_dependencies": str(Path(sys.argv[2]).resolve()),
+}, indent=2) + "\n", encoding="utf-8")
+PY
   else
     echo "WARNING: semantic analysis failed; Move Class import fallback remains available, Move Method will stay unresolved." >&2
+    semantic_reason="semantic_analysis_failed"
+    if grep -qiE 'Java heap space|OutOfMemoryError' "$LOG_DIR/semantic-analysis.log"; then
+      semantic_reason="java_heap_exhausted"
+    fi
+    "$PYTHON" - "$SEMANTIC_STATUS" "$semantic_reason" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "status": "fallback", "fallback_used": True, "reason": sys.argv[2],
+    "capabilities_lost": ["semantic_move_method_resolution", "semantic_destination_affinity"],
+    "fallback_capability": "conservative_move_class_import_analysis",
+}, indent=2) + "\n", encoding="utf-8")
+PY
   fi
 
   generator_arguments=(
@@ -1220,6 +1243,7 @@ PY
     --model-evaluation "$RESULTS_DIR/model-evaluation.json" \
     --training-data-quality "$RESULTS_DIR/training-data-quality.json" \
     --provenance "$RESULTS_DIR/run-provenance.json" \
+    --semantic-status "$RESULTS_DIR/semantic-analysis/status.json" \
     --output "$RESULTS_DIR/experiment-report.json" >/dev/null
   write_stage_contract smells "$REWRITE_REPO" "$RESULTS_DIR/arcan-comparison.json"
 fi

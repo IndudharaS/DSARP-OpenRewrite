@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 # This file is invoked directly by the shell pipeline. Ensure repository-local
@@ -380,8 +381,8 @@ def main() -> None:
                     modules = affected_maven_modules(worktree, changed_files)
                     test_command = maven_command(worktree)
                     if modules and modules != ["."]:
-                        test_command += ["-pl", ",".join(modules), "-am"]
-                        test_scope = "affected_maven_modules:" + ",".join(modules)
+                        test_command += ["-pl", ",".join(modules), "-am", "-amd"]
+                        test_scope = "affected_maven_modules_and_dependents:" + ",".join(modules)
                     else:
                         test_scope = "full_reactor"
                     test_command += ["-DforkCount=1", "test"]
@@ -570,6 +571,12 @@ def main() -> None:
                   "validation_reason", "diagnostic_log", "changed_files", "test_scope"]
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader(); writer.writerows(results)
+    evidence_archive = output / "candidate-validation-evidence.zip"
+    with zipfile.ZipFile(evidence_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(output.rglob("*")):
+            if (path.is_file() and path != evidence_archive
+                    and "worktrees" not in path.relative_to(output).parts):
+                archive.write(path, path.relative_to(output))
     print(json.dumps({key: value for key, value in report.items() if key != "records"}, indent=2))
     if not validated:
         print("No generated candidate passed isolated Maven verification; no recipe will be applied.")

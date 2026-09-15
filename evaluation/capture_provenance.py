@@ -46,6 +46,8 @@ def main() -> None:
         "java": command(str(args.java), "-version"),
         "maven_test_excludes": os.environ.get("DSARP_MAVEN_TEST_EXCLUDES"),
         "maven_fork_count": os.environ.get("DSARP_MAVEN_FORK_COUNT"),
+        "maven_opts": os.environ.get("MAVEN_OPTS"),
+        "semantic_maven_opts": os.environ.get("DSARP_SEMANTIC_MAVEN_OPTS"),
         "tools": {
             "arcan_jar": {"path": str(args.arcan_jar), "sha256": digest(args.arcan_jar)},
             "refactoring_miner": {"path": str(args.refactoring_miner)},

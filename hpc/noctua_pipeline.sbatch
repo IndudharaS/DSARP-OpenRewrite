@@ -35,6 +35,7 @@ export DSARP_ARCAN_HOME="$TOOLS_ROOT/arcan-1.2.1/distribution/arcan-1.2.1"
 MAVEN_REPOSITORY="${MAVEN_REPOSITORY:-$PROJECT_SPACE/maven-repository/jobs/$SLURM_JOB_ID}"
 mkdir -p "$MAVEN_REPOSITORY"
 export MAVEN_OPTS="-Dmaven.repo.local=$MAVEN_REPOSITORY -Xmx12g"
+export DSARP_SEMANTIC_MAVEN_OPTS="-Dmaven.repo.local=$MAVEN_REPOSITORY -Xmx28g -XX:+UseG1GC"
 
 # Some supported repositories (including the pinned Tika revision) do not ship
 # mvnw. Provide a pinned, job-local Maven fallback while still preferring a

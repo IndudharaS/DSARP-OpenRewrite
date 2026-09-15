@@ -46,6 +46,7 @@ def main() -> None:
     parser.add_argument("--model-evaluation", type=Path)
     parser.add_argument("--training-data-quality", type=Path)
     parser.add_argument("--provenance", type=Path)
+    parser.add_argument("--semantic-status", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -115,6 +116,7 @@ def main() -> None:
     model_evaluation = read_json(args.model_evaluation) if args.model_evaluation and args.model_evaluation.is_file() else None
     training_quality = read_json(args.training_data_quality) if args.training_data_quality and args.training_data_quality.is_file() else None
     provenance = read_json(args.provenance) if args.provenance and args.provenance.is_file() else None
+    semantic_status = read_json(args.semantic_status) if args.semantic_status and args.semantic_status.is_file() else None
     artifacts = [args.predictions, args.manifest, args.validation, args.comparison]
     artifacts += [path for path in (args.model_evaluation, args.training_data_quality, args.provenance) if path and path.is_file()]
     report = {
@@ -125,6 +127,7 @@ def main() -> None:
         "model_evaluation": model_evaluation,
         "training_data_quality": training_quality,
         "provenance": provenance,
+        "semantic_analysis": semantic_status,
         "candidates": {
             "generated": generated_count,
             "validated": validated,

@@ -27,6 +27,10 @@ else
   exit 1
 fi
 export JAVA_HOME="$JAVA_HOME_VALUE"
+if [[ -n "${DSARP_SEMANTIC_MAVEN_OPTS:-}" ]]; then
+  export MAVEN_OPTS="$DSARP_SEMANTIC_MAVEN_OPTS"
+fi
+echo "Semantic Maven JVM options: ${MAVEN_OPTS:-<Maven defaults>}"
 "${MAVEN[@]}" -q -f "$PROJECT_ROOT/openrewrite-java/pom.xml" -DskipTests install
 
 # OpenRewrite's aggregator resolves reactor SNAPSHOT dependencies before it

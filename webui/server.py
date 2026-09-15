@@ -811,6 +811,7 @@ def result_summary(data: dict) -> dict:
         "experiment": "experiment-report.json",
         "modelEvaluation": "model-evaluation.json",
         "trainingQuality": "training-data-quality.json",
+        "semanticStatus": "semantic-analysis/status.json",
     }.items():
         path = result / relative
         if path.is_file():
@@ -831,8 +832,11 @@ def result_summary(data: dict) -> dict:
         f"pipeline-results/{data['system']}_refactoring_suggestions_from_trained_model.csv",
         "results/baseline-input-validation.json", "results/run-provenance.json",
         "results/training-data-quality.json", "results/model-evaluation.json",
+        "results/semantic-analysis/status.json",
         "results/generated-openrewrite/manifest.csv",
         "results/openrewrite-validation/validation-report.csv",
+        "results/openrewrite-validation/validation-report.json",
+        "results/openrewrite-validation/candidate-validation-evidence.zip",
         "results/arcan-comparison.csv", "results/arcan-comparison.json",
         "results/experiment-report.json",
         "results/arcan-baseline-matched/input-manifest.json",
