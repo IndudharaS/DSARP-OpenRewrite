@@ -117,7 +117,7 @@ if [[ -n "${START_STAGE:-}" ]]; then
   }
   pipeline_resume_arguments+=(--from "$START_STAGE")
   printf 'Slurm job %s resumed run %s from %s with Maven fork count %s\n' \
-    "$SLURM_JOB_ID" "$RESUME_RUN_ID" "$START_STAGE" "$DSARP_MAVEN_FORK_COUNT" \
+    "$SLURM_JOB_ID" "$RESUME_RUN_ID" "$START_STAGE" "${DSARP_MAVEN_FORK_COUNT:-default}" \
     >"$RUN_ROOT/resume-$SLURM_JOB_ID.txt"
   echo "Resuming run $RESUME_RUN_ID from stage $START_STAGE"
 fi

@@ -82,6 +82,11 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(profile_for_target(
             "tika", "https://github.com/apache/tika.git"), "none")
 
+    def test_generic_cli_uses_repository_profile_auto_detection(self) -> None:
+        script = (Path(__file__).parents[1] / "scripts" / "run_generic_pipeline.sh").read_text()
+        self.assertIn("profile_for_target", script)
+        self.assertIn('if [[ "$detected_profile" == "none" ]]', script)
+
     def test_production_changes_map_to_affected_maven_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary)
@@ -297,6 +302,14 @@ class EvidenceTests(unittest.TestCase):
         script = (Path(__file__).parents[1] / "scripts" / "run_log4j2_pipeline.sh").read_text()
         self.assertIn('if [[ "$PROFILE" != "log4j2" ]]', script)
         self.assertIn('verify_arguments=(-DskipTests verify)', script)
+        self.assertIn('[[ -f "$BASE_REPO/pom.xml" ]]', script)
+        self.assertIn("currently support Maven Java repositories only", script)
+
+    def test_cumulative_validation_uses_its_own_worktree(self) -> None:
+        script = (Path(__file__).parents[1] / "evaluation" /
+                  "validate_openrewrite_candidates.py").read_text()
+        self.assertNotIn("maven_command(aggregate_worktree)", script)
+        self.assertIn('maven_command(cumulative_worktree) + ["-DskipTests", "verify"]', script)
         validator = (Path(__file__).parents[1] / "evaluation" /
                      "validate_openrewrite_candidates.py").read_text()
         self.assertIn('test_command += ["-DforkCount=1", "test"]', validator)

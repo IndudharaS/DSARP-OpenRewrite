@@ -106,7 +106,19 @@ done
 [[ -n "$PROJECT_NAME" && -n "$REPOSITORY_URL" && -n "$VERSION_ID" ]] || { usage >&2; exit 2; }
 [[ "$PROJECT_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid system name: $PROJECT_NAME" >&2; exit 2; }
 if [[ -z "$PROFILE" ]]; then
-  if [[ "$PROJECT_NAME" == "logging-log4j2" ]]; then PROFILE="log4j2"; else PROFILE="generic"; fi
+  detected_profile="$(PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    "${DSARP_PYTHON:-python3}" - "$PROJECT_NAME" "$REPOSITORY_URL" <<'PY'
+import sys
+from openrewrite.compatibility_profiles import profile_for_target
+
+print(profile_for_target(sys.argv[1], sys.argv[2]))
+PY
+)"
+  if [[ "$detected_profile" == "none" ]]; then
+    PROFILE="generic"
+  else
+    PROFILE="$detected_profile"
+  fi
 fi
 [[ "$PROFILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid profile: $PROFILE" >&2; exit 2; }
 if [[ "$PROFILE" != "generic" && ! -f "$PROJECT_ROOT/openrewrite/profiles/$PROFILE.json" ]]; then

@@ -480,11 +480,11 @@ def main() -> None:
                     failed_record = record
                     break
             if apply_status == 0 and uses_spotless(cumulative_worktree):
-                apply_status = run(maven_command(aggregate_worktree) + ["-DskipTests", "spotless:apply"],
+                apply_status = run(maven_command(cumulative_worktree) + ["-DskipTests", "spotless:apply"],
                                    cwd=cumulative_worktree,
                                    log=cumulative_log / "spotless.log", env=environment)
             if apply_status == 0:
-                apply_status = run(maven_command(aggregate_worktree) + ["-DskipTests", "verify"],
+                apply_status = run(maven_command(cumulative_worktree) + ["-DskipTests", "verify"],
                                    cwd=cumulative_worktree,
                                    log=cumulative_log / "verify.log", env=environment)
             run(["git", "-C", str(repository), "worktree", "remove", "--force",

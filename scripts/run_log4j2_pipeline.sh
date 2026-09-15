@@ -1004,6 +1004,12 @@ if should_run clone; then
     echo "Existing baseline repository is not clean: $BASE_REPO" >&2
     exit 1
   }
+  [[ -f "$BASE_REPO/pom.xml" ]] || {
+    echo "Unsupported target repository: no root pom.xml was found in $BASE_REPO" >&2
+    echo "The verification and OpenRewrite stages currently support Maven Java repositories only." >&2
+    echo "Gradle and Ant repositories require separate build and OpenRewrite adapters." >&2
+    exit 2
+  }
   write_stage_contract clone "$BASE_REPO"
 fi
 
