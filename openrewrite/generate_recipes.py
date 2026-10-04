@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import re
+import zipfile
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -23,6 +24,7 @@ from openrewrite.compatibility_profiles import any_compatibility_strategy
 from openrewrite.resolvers.move_method import resolve_move_method
 from openrewrite.resolvers.move_class import rank_semantic_move_classes
 from openrewrite.semantic_analysis import load_methods
+from openrewrite.llm_resolver import LlmResolver
 
 
 PACKAGE_RE = re.compile(r"^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;", re.MULTILINE)
@@ -503,6 +505,13 @@ def generate(args: argparse.Namespace) -> None:
     move_class_metadata_cache: dict[str, tuple[str, ...]] = {}
     metadata_corpus: list[tuple[str, bytes]] | None = None
     candidate_count = 0
+    llm = None
+    if getattr(args, "llm_endpoint", None):
+        llm = LlmResolver(
+            args.llm_endpoint, args.llm_model, output_dir / "llm-proposals",
+            timeout=args.llm_timeout, max_calls=args.llm_max_calls,
+            min_confidence=args.llm_min_confidence,
+        )
 
     with args.predictions.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -859,6 +868,139 @@ def generate(args: argparse.Namespace) -> None:
         records.append(record)
         records.extend(additional_records)
 
+    # The LLM is a bounded selector over repository-derived identifiers, not a
+    # source of executable truth. Every accepted proposal is checked here and
+    # later compiled/tested by the existing isolated-worktree validator.
+    if llm:
+        methods_by_key = {(method.qualified_owner, method.signature): method
+                          for method in semantic_methods}
+        llm_attempted_predictions: set[int] = set()
+        for record in records:
+            if record.status == "ready_for_dry_run" or record.status == "deferred_severity":
+                continue
+            if record.prediction_id in llm_attempted_predictions:
+                continue
+            llm_attempted_predictions.add(record.prediction_id)
+            affected = set(record.affected_elements)
+            type_options = sorted(
+                value.qualified_name for value in types.values()
+                if value.package in affected
+            )[:160]
+            method_options = [
+                {
+                    "source_type": method.qualified_owner,
+                    "source_signature": method.signature,
+                    "destination_types": sorted({
+                        dependency.target_type for dependency in method.dependencies
+                        if dependency.target_type in types
+                        and dependency.target_package in affected
+                    })[:20],
+                }
+                for method in semantic_methods
+                if method.package in affected and method.is_static and not method.is_abstract
+                and not method.is_native and method.name not in {"<init>", "<clinit>"}
+            ][:100]
+            proposal = llm.resolve(record.prediction_id, {
+                "prediction_id": record.prediction_id,
+                "architecture_smell": record.architecture_smell,
+                "affected_packages": sorted(affected),
+                "ranked_prediction": record.top_refactoring,
+                "deterministic_status": record.status,
+                "deterministic_reason": record.reason,
+                "available_types": type_options,
+                "available_methods": method_options,
+            })
+            if proposal is None or proposal.operation == "reject":
+                continue
+            if proposal.operation == "move_class":
+                source = types.get(proposal.source_type or "")
+                destination = proposal.destination_type or ""
+                destination_package = destination.rsplit(".", 1)[0] if "." in destination else ""
+                if (not source or source.qualified_name not in type_options
+                        or destination != f"{destination_package}.{source.simple_name}"
+                        or destination_package not in affected or destination in types):
+                    continue
+                destination_types = [item for item in types.values()
+                                     if item.package == destination_package]
+                if not any(item.module == source.module and item.source_set == source.source_set
+                           for item in destination_types):
+                    continue
+                dependencies = original_package_dependencies(
+                    repository, source, types, semantic_methods)
+                if dependencies:
+                    continue
+                if metadata_corpus is None:
+                    metadata_corpus = external_metadata_corpus(repository)
+                if external_type_metadata_references(metadata_corpus, source):
+                    continue
+                record.source_type = source.qualified_name
+                record.destination_type = destination
+                record.source_package = source.package
+                record.destination_package = destination_package
+                record.refactoring_kind = "Move Class"
+                record.analysis_source = "llm_bounded"
+                record.candidate_score = proposal.confidence
+                record.structural_score = proposal.confidence
+                record.precondition_status = "ready_for_dry_run"
+                record.risk_level = ("test_only" if source.source_set == "test"
+                                     else "high_public_api" if source.is_public else "normal")
+                set_move_class_api_impact(record, source, destination)
+                recipe_name = f"generated.architecture.P{record.prediction_id}_LlmMove_{safe_fragment(source.simple_name)}"
+                recipe_file = recipe_dir / f"prediction-{record.prediction_id:04d}-llm-move-{safe_fragment(source.simple_name).lower()}.yml"
+                recipe_file.write_text(recipe_yaml(recipe_name, source.qualified_name, destination,
+                    f"Bounded LLM proposal for prediction {record.prediction_id}: {proposal.reason}."), encoding="utf-8")
+                record.status = "ready_for_dry_run"
+                record.reason = f"bounded LLM proposal ({proposal.confidence:.3f}): {proposal.reason}"
+                record.recipe_name = recipe_name
+                record.recipe_file = str(recipe_file.relative_to(output_dir))
+                record.candidate_origin = "llm_bounded_selection"
+                claimed_sources[source.qualified_name] = record.prediction_id
+                candidate_count += 1
+            elif proposal.operation == "move_method":
+                method = methods_by_key.get((proposal.source_type or "", proposal.source_signature or ""))
+                destination = types.get(proposal.destination_type or "")
+                source = types.get(proposal.source_type or "")
+                if (not method or not destination or not source
+                        or destination.qualified_name not in type_options
+                        or destination.package not in affected
+                        or source.module != destination.module
+                        or source.source_set != destination.source_set
+                        or not method.is_static or method.visibility != "public"
+                        or method.source_state_references or method.is_abstract or method.is_native
+                        or (destination.qualified_name, method.signature) in methods_by_key):
+                    continue
+                recipe_name = f"generated.architecture.P{record.prediction_id}_LlmMoveMethod_{safe_fragment(method.name)}"
+                recipe_file = recipe_dir / f"prediction-{record.prediction_id:04d}-llm-move-method-{safe_fragment(method.name).lower()}.yml"
+                recipe_file.write_text(move_method_recipe_yaml(recipe_name, source.qualified_name,
+                    method.signature, destination.qualified_name,
+                    f"Bounded LLM proposal for prediction {record.prediction_id}: {proposal.reason}."), encoding="utf-8")
+                record.source_type = source.qualified_name
+                record.destination_type = destination.qualified_name
+                record.source_package = source.package
+                record.destination_package = destination.package
+                record.source_member = method.name
+                record.source_signature = method.signature
+                record.destination_member = method.name
+                record.destination_class = destination.qualified_name
+                record.refactoring_kind = "Move Method"
+                record.analysis_source = "llm_bounded"
+                record.candidate_score = proposal.confidence
+                record.structural_score = proposal.confidence
+                record.precondition_status = "ready_for_dry_run"
+                record.risk_level = "test_only" if source.source_set == "test" else "high_public_api"
+                set_api_impact(record, public=source.source_set != "test", member_level=True)
+                if source.source_set == "test":
+                    record.api_impact = "test_only"
+                    record.compatibility_strategy = "not_required"
+                    record.automatic_execution_allowed = True
+                record.status = "ready_for_dry_run"
+                record.reason = f"bounded LLM proposal ({proposal.confidence:.3f}): {proposal.reason}"
+                record.recipe_name = recipe_name
+                record.recipe_file = str(recipe_file.relative_to(output_dir))
+                record.candidate_origin = "llm_bounded_selection"
+                claimed_methods.add((source.qualified_name, method.signature))
+                candidate_count += 1
+
     if getattr(args, "include_curated_filesize", False):
         source_name = "org.apache.logging.log4j.core.appender.rolling.FileSize"
         destination_name = "org.apache.logging.log4j.core.appender.rolling.action.FileSize"
@@ -905,10 +1047,22 @@ def generate(args: argparse.Namespace) -> None:
         "selected_severity_categories": sorted(selected_severities),
         "aggregate_recipe_name": "generated.architecture.ApplyAllCandidates",
         "aggregate_recipe_file": "all-candidates.yml",
+        "llm_resolution": {
+            "enabled": bool(llm),
+            "endpoint": getattr(args, "llm_endpoint", None) if llm else None,
+            "model": getattr(args, "llm_model", None) if llm else None,
+            "network_calls": llm.calls if llm else 0,
+            "accepted_candidates": sum(record.candidate_origin == "llm_bounded_selection" for record in records),
+        },
         "records": [asdict(record) for record in records],
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     (output_dir / "all-candidates.yml").write_text(aggregate_recipe_yaml(records), encoding="utf-8")
+    if llm:
+        proposal_dir = output_dir / "llm-proposals"
+        with zipfile.ZipFile(output_dir / "llm-proposals.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+            for proposal_file in sorted(proposal_dir.glob("*.json")):
+                archive.write(proposal_file, proposal_file.name)
 
     fields = list(asdict(records[0]).keys()) if records else list(ManifestRecord.__annotations__)
     with (output_dir / "manifest.csv").open("w", newline="", encoding="utf-8") as handle:
@@ -938,6 +1092,11 @@ def main() -> None:
                         help="OpenRewrite semantic dependency JSON; import analysis remains Move Class fallback")
     parser.add_argument("--include-curated-filesize", action="store_true",
                         help="include the evidence-backed Log4j2 FileSize compatibility experiment")
+    parser.add_argument("--llm-endpoint", help="OpenAI-compatible local endpoint, for example http://gpu-node:8000")
+    parser.add_argument("--llm-model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
+    parser.add_argument("--llm-timeout", type=int, default=120)
+    parser.add_argument("--llm-max-calls", type=int, default=20)
+    parser.add_argument("--llm-min-confidence", type=float, default=0.65)
     parser.add_argument(
         "--severity-categories", default="high,medium,low",
         help="comma-separated categories to process: high,medium,low (default: all)",
@@ -947,6 +1106,10 @@ def main() -> None:
     if not categories or not categories.issubset({"high", "medium", "low"}):
         parser.error("--severity-categories must contain high, medium and/or low")
     args.severity_categories = ",".join(categories)
+    if args.llm_endpoint and not re.fullmatch(r"https?://[^\s/]+(?::\d+)?", args.llm_endpoint.rstrip("/")):
+        parser.error("--llm-endpoint must be an HTTP(S) origin without a path")
+    if args.llm_timeout < 1 or args.llm_max_calls < 1 or not 0 <= args.llm_min_confidence <= 1:
+        parser.error("invalid LLM timeout, call limit, or confidence threshold")
     generate(args)
 
 

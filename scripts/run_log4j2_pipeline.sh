@@ -46,6 +46,10 @@ BATCH_SIZE=10
 START_BATCH=1
 MAX_BATCHES=0
 MAX_COMMITS_PER_REPO=500
+LLM_ENDPOINT="${DSARP_LLM_ENDPOINT:-}"
+LLM_MODEL="${DSARP_LLM_MODEL:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
+LLM_MAX_CALLS="${DSARP_LLM_MAX_CALLS:-20}"
+LLM_MIN_CONFIDENCE="${DSARP_LLM_MIN_CONFIDENCE:-0.65}"
 START_STAGE="preflight"
 STOP_STAGE="summary"
 
@@ -92,6 +96,11 @@ Options:
   --max-commits-per-repo NUMBER
                          Maximum historical commits mined from each training
                          repository (default: 500).
+  --llm-endpoint URL     Use an OpenAI-compatible local LLM to resolve otherwise
+                         unresolved candidates (for example http://gpu-node:8000).
+  --llm-model NAME       Served model name reported to the endpoint.
+  --llm-max-calls NUMBER Maximum LLM requests in one run (default: 20).
+  --llm-min-confidence N Reject proposals below this confidence (default: 0.65).
   --help                 Show this help.
 
 Stages:
@@ -142,6 +151,10 @@ while (($#)); do
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
     --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
     --max-commits-per-repo) MAX_COMMITS_PER_REPO="${2:?missing commit limit}"; shift 2 ;;
+    --llm-endpoint) LLM_ENDPOINT="${2:?missing LLM endpoint}"; shift 2 ;;
+    --llm-model) LLM_MODEL="${2:?missing LLM model}"; shift 2 ;;
+    --llm-max-calls) LLM_MAX_CALLS="${2:?missing LLM call limit}"; shift 2 ;;
+    --llm-min-confidence) LLM_MIN_CONFIDENCE="${2:?missing LLM confidence}"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -162,6 +175,7 @@ fi
 [[ "$START_BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "--start-batch must be a positive integer" >&2; exit 2; }
 [[ "$MAX_BATCHES" =~ ^[0-9]+$ ]] || { echo "--max-batches must be zero or a positive integer" >&2; exit 2; }
 [[ "$MAX_COMMITS_PER_REPO" =~ ^[1-9][0-9]*$ ]] || { echo "--max-commits-per-repo must be a positive integer" >&2; exit 2; }
+[[ "$LLM_MAX_CALLS" =~ ^[1-9][0-9]*$ ]] || { echo "--llm-max-calls must be a positive integer" >&2; exit 2; }
 if [[ "$PROFILE" == "generic" ]]; then
   OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_maven.sh"
   VALIDATOR_COMPATIBILITY_PROFILE="none"
@@ -1082,6 +1096,10 @@ PY
       exit 2
     }
     generator_arguments+=(--include-curated-filesize)
+  fi
+  if [[ -n "$LLM_ENDPOINT" ]]; then
+    generator_arguments+=(--llm-endpoint "$LLM_ENDPOINT" --llm-model "$LLM_MODEL" \
+      --llm-max-calls "$LLM_MAX_CALLS" --llm-min-confidence "$LLM_MIN_CONFIDENCE")
   fi
   "$OPENREWRITE_GENERATOR" "${generator_arguments[@]}"
 

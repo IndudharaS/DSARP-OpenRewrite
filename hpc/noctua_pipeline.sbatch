@@ -64,6 +64,10 @@ START_BATCH="${START_BATCH:-1}"
 MAX_BATCHES="${MAX_BATCHES:-1}"
 PIPELINE_MODE="${PIPELINE_MODE:-reuse_predictions}"
 MAX_COMMITS_PER_REPO="${MAX_COMMITS_PER_REPO:-500}"
+LLM_ENDPOINT="${LLM_ENDPOINT:-}"
+LLM_MODEL="${LLM_MODEL:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
+LLM_MAX_CALLS="${LLM_MAX_CALLS:-20}"
+LLM_MIN_CONFIDENCE="${LLM_MIN_CONFIDENCE:-0.65}"
 PREDICTIONS="${PREDICTIONS_CSV:-$PROJECT_ROOT/shared/pipeline-cache/$SYSTEM/${VERSION_ID,,}/predictions.csv}"
 TRAINING_DATASET="${TRAINING_DATASET:-}"
 PRETRAINED_MODEL_DIR="${PRETRAINED_MODEL_DIR:-$PROJECT_ROOT/shared/trained-model/default/final_model}"
@@ -147,6 +151,16 @@ if [[ "${INCLUDE_CURATED_FILESIZE:-0}" == "1" ]]; then
 fi
 if [[ -n "$PROFILE" ]]; then
   pipeline_policy_arguments+=(--profile "$PROFILE")
+fi
+if [[ -n "$LLM_ENDPOINT" ]]; then
+  curl -fsS --connect-timeout 10 --max-time 30 "$LLM_ENDPOINT/v1/models" >/dev/null || {
+    echo "The configured LLM service is not reachable from $(hostname): $LLM_ENDPOINT" >&2
+    echo "Start the GPU model service first and use its compute-node URL." >&2
+    exit 1
+  }
+  pipeline_policy_arguments+=(--llm-endpoint "$LLM_ENDPOINT" --llm-model "$LLM_MODEL" \
+    --llm-max-calls "$LLM_MAX_CALLS" --llm-min-confidence "$LLM_MIN_CONFIDENCE")
+  echo "LLM candidate resolution: $LLM_MODEL at $LLM_ENDPOINT (maximum $LLM_MAX_CALLS calls)"
 fi
 
 scripts/run_generic_pipeline.sh \

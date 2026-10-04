@@ -48,6 +48,7 @@ SUBMIT_LOCK = threading.Lock()
 HPC_REFRESHING: set[str] = set()
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
+HTTP_ORIGIN = re.compile(r"^https?://[^\s/]+(?::[0-9]{1,5})?/?$")
 SLURM_ACTIVE = {"PENDING": "queued", "CONFIGURING": "queued", "RUNNING": "running",
                 "COMPLETING": "running", "REQUEUED": "queued", "RESIZING": "running"}
 SLURM_FAILED = {"FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "BOOT_FAIL",
@@ -487,6 +488,22 @@ def validate_max_commits(payload: dict) -> int:
     return value
 
 
+def validate_llm_options(payload: dict) -> tuple[bool, str, str, int, float]:
+    enabled = bool(payload.get("llmEnabled", False))
+    endpoint = str(payload.get("llmEndpoint", "")).strip().rstrip("/")
+    model = str(payload.get("llmModel", "Qwen/Qwen3-Coder-30B-A3B-Instruct")).strip()
+    try:
+        max_calls = int(payload.get("llmMaxCalls", 20))
+        confidence = float(payload.get("llmMinConfidence", 0.65))
+    except (TypeError, ValueError) as error:
+        raise ValueError("LLM call limit and confidence must be numeric") from error
+    if enabled and (not HTTP_ORIGIN.fullmatch(endpoint) or not model):
+        raise ValueError("LLM endpoint must be an HTTP(S) origin and model must not be empty")
+    if not 1 <= max_calls <= 500 or not 0 <= confidence <= 1:
+        raise ValueError("LLM calls must be 1-500 and confidence must be between 0 and 1")
+    return enabled, endpoint, model, max_calls, confidence
+
+
 def shared_mining_summary() -> dict:
     dataset = MINING_MANIFEST.parent / "output" / "arcan_style_training_dataset.jsonl"
     if not MINING_MANIFEST.is_file() or not dataset.is_file() or dataset.stat().st_size == 0:
@@ -580,6 +597,7 @@ def submission_key(payload: dict) -> str:
         "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
         "startBatch", "maxBatches", "resumeRunId", "resumeStage", "stopStage",
         "workflowGoal", "maxCommitsPerRepository", "runName", "pretrainedModelDir",
+        "llmEnabled", "llmEndpoint", "llmModel", "llmMaxCalls", "llmMinConfidence",
     )}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -617,6 +635,7 @@ def start_hpc_run(payload: dict) -> dict:
     pretrained_model = validate_pretrained_model(payload) if mode == "pretrained_model" else ""
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky = bool(payload.get("allowRiskyCandidates", False))
+    llm_enabled, llm_endpoint, llm_model, llm_max_calls, llm_confidence = validate_llm_options(payload)
     compatibility_profile = profile_for_target(system, repository)
     include_curated_filesize = compatibility_profile == "log4j2"
     resume_id = str(payload.get("resumeRunId", "")).strip()
@@ -676,6 +695,10 @@ def start_hpc_run(payload: dict) -> dict:
         "ALLOW_RISKY_CANDIDATES": "1" if allow_risky else "0",
         "INCLUDE_CURATED_FILESIZE": "1" if include_curated_filesize else "0",
         "PROFILE": compatibility_profile if compatibility_profile != "none" else "generic",
+        "LLM_ENDPOINT": llm_endpoint if llm_enabled else "",
+        "LLM_MODEL": llm_model,
+        "LLM_MAX_CALLS": str(llm_max_calls),
+        "LLM_MIN_CONFIDENCE": str(llm_confidence),
     })
     if resume_id:
         environment.update({"RESUME_RUN_ID": resume_id, "START_STAGE": resume_stage})
@@ -698,6 +721,9 @@ def start_hpc_run(payload: dict) -> dict:
         "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "hpc", "freshMining": fresh_mining,
         "allowRiskyCandidates": allow_risky, "includeCuratedFileSize": include_curated_filesize,
         "compatibilityProfile": compatibility_profile,
+        "llmEnabled": llm_enabled, "llmEndpoint": llm_endpoint if llm_enabled else None,
+        "llmModel": llm_model if llm_enabled else None, "llmMaxCalls": llm_max_calls,
+        "llmMinConfidence": llm_confidence,
         "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
         "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
@@ -757,6 +783,7 @@ def start_run(payload: dict) -> dict:
         raise ValueError("Unknown run mode")
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky_candidates = bool(payload.get("allowRiskyCandidates", False))
+    llm_enabled, llm_endpoint, llm_model, llm_max_calls, llm_confidence = validate_llm_options(payload)
     include_curated_filesize = compatibility_profile == "log4j2"
     severity_categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
     if fresh_mining:
@@ -767,6 +794,10 @@ def start_run(payload: dict) -> dict:
         command.append("--allow-risky-candidates")
     if include_curated_filesize:
         command.append("--include-curated-filesize")
+    if llm_enabled:
+        command += ["--llm-endpoint", llm_endpoint, "--llm-model", llm_model,
+                    "--llm-max-calls", str(llm_max_calls),
+                    "--llm-min-confidence", str(llm_confidence)]
     command += ["--severity-categories", ",".join(severity_categories),
                 "--batch-size", str(batch_size), "--start-batch", str(start_batch),
                 "--max-batches", str(max_batches), "--max-commits-per-repo", str(max_commits),
@@ -779,6 +810,9 @@ def start_run(payload: dict) -> dict:
             "allowRiskyCandidates": allow_risky_candidates,
             "includeCuratedFileSize": include_curated_filesize,
             "compatibilityProfile": compatibility_profile,
+            "llmEnabled": llm_enabled, "llmEndpoint": llm_endpoint if llm_enabled else None,
+            "llmModel": llm_model if llm_enabled else None, "llmMaxCalls": llm_max_calls,
+            "llmMinConfidence": llm_confidence,
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
             "stopStage": stop_stage, "maxCommitsPerRepository": max_commits,
@@ -834,6 +868,7 @@ def result_summary(data: dict) -> dict:
         "results/training-data-quality.json", "results/model-evaluation.json",
         "results/semantic-analysis/status.json",
         "results/generated-openrewrite/manifest.csv",
+        "results/generated-openrewrite/llm-proposals.zip",
         "results/openrewrite-validation/validation-report.csv",
         "results/openrewrite-validation/validation-report.json",
         "results/openrewrite-validation/candidate-validation-evidence.zip",

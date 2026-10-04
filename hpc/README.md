@@ -99,6 +99,37 @@ Fresh mode does not require the shared prediction CSV. It passes `--remine`,
 then prepares training data, trains the model, generates new predictions, and
 continues through OpenRewrite and Arcan.
 
+## Optional local LLM recipe resolution
+
+The pipeline can ask an OpenAI-compatible model hosted on an HPC GPU node to
+resolve predictions that deterministic semantic analysis cannot concretize.
+The model only selects repository-discovered symbols; generated candidates
+still pass the existing source, API, OpenRewrite, Maven and test gates.
+
+Create a dedicated vLLM environment once (using the PyTorch/CUDA installation
+supported by the cluster), then start the reusable service:
+
+```bash
+sbatch hpc/noctua_llm_server.sbatch
+```
+
+After the job reports `RUNNING`, find the endpoint:
+
+```bash
+LLM_JOB=<job-id>
+cat "/scratch/hpc-prf-dssecs/$USER/llm-services/$LLM_JOB/service.json"
+```
+
+In the dashboard, enable **Local HPC LLM resolution**, copy the `endpoint`, and
+leave the served model as `Qwen/Qwen3-Coder-30B-A3B-Instruct`. Start with 20
+requests and confidence 0.65. The CPU pipeline job checks the endpoint before
+starting and stores every prompt hash, response, model name, timing and accepted
+proposal under `results/generated-openrewrite/llm-proposals/`.
+
+The service requests two A100 GPUs because the BF16 30B model may not fit on a
+single 40 GB A100. If `nvidia-smi` confirms 80 GB A100s, the job can be changed
+to one GPU and `--tensor-parallel-size 1` after a controlled test.
+
 To generate predictions for a new target without retraining, select
 **Predictions using trained model** in the dashboard. It automatically uses
 `shared/trained-model/default/final_model`; no path entry is required. The
