@@ -41,6 +41,7 @@ PRETRAINED_MODEL_DIR=""
 REMINE=0
 ALLOW_RISKY_CANDIDATES=0
 INCLUDE_CURATED_FILESIZE=0
+REUSE_GENERATED_CANDIDATES=0
 SEVERITY_CATEGORIES="high,medium,low"
 BATCH_SIZE=10
 START_BATCH=1
@@ -90,6 +91,8 @@ Options:
   --include-curated-filesize
                          Add the evidence-backed Log4j2 FileSize move with its
                          compatibility facade as a separately labelled candidate.
+  --reuse-generated-candidates
+                         Reuse stored recipes and the stable candidate batch set.
   --severity-categories LIST
                          Comma-separated high,medium,low categories (default: all).
   --batch-size NUMBER    Candidates validated per batch (default: 10).
@@ -151,6 +154,7 @@ while (($#)); do
     --profile) PROFILE="${2:?missing profile}"; shift 2 ;;
     --allow-risky-candidates) ALLOW_RISKY_CANDIDATES=1; shift ;;
     --include-curated-filesize) INCLUDE_CURATED_FILESIZE=1; shift ;;
+    --reuse-generated-candidates) REUSE_GENERATED_CANDIDATES=1; shift ;;
     --severity-categories) SEVERITY_CATEGORIES="${2:?missing categories}"; shift 2 ;;
     --batch-size) BATCH_SIZE="${2:?missing batch size}"; shift 2 ;;
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
@@ -227,6 +231,12 @@ stage_index() {
 START_INDEX="$(stage_index "$START_STAGE")"
 STOP_INDEX="$(stage_index "$STOP_STAGE")"
 (( START_INDEX <= STOP_INDEX )) || { echo "--from must not follow --through" >&2; exit 2; }
+if ((START_INDEX > $(stage_index prediction))); then
+  retained_prediction="$RUN_ROOT/pipeline-results/${PROJECT_NAME}_refactoring_suggestions_from_trained_model.csv"
+  if [[ -f "$retained_prediction" ]]; then
+    PREDICTIONS="$retained_prediction"
+  fi
+fi
 
 should_run() {
   local index
@@ -1065,6 +1075,27 @@ if should_run rewrite; then
   semantic_arguments=()
   semantic_ready=0
   mkdir -p "$(dirname "$SEMANTIC_STATUS")"
+  if ((REUSE_GENERATED_CANDIDATES)); then
+    require_file "$RESULTS_DIR/generated-openrewrite/manifest.json"
+    require_file "$RESULTS_DIR/prediction-batches/manifest.json"
+    read -r stored_batch_size stored_total_batches < <("$PYTHON" - \
+      "$RESULTS_DIR/prediction-batches/manifest.json" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(data["batch_size"], data["total_batches"])
+PY
+    )
+    [[ "$BATCH_SIZE" == "$stored_batch_size" ]] || {
+      echo "Stored candidates use batch size $stored_batch_size; keep that value when resuming." >&2
+      exit 2
+    }
+    ((START_BATCH <= stored_total_batches)) || {
+      echo "Stored candidate set has only $stored_total_batches batch(es); requested $START_BATCH." >&2
+      exit 2
+    }
+    echo "Reusing the stored OpenRewrite recipes and candidate batch set."
+  else
   if "$SEMANTIC_ANALYZER" --repository "$REWRITE_REPO" --output "$SEMANTIC_OUTPUT" \
       --java-home "$JAVA_HOME_17" 2>&1 | tee "$LOG_DIR/semantic-analysis.log"; then
     semantic_arguments=(--semantic-analysis "$SEMANTIC_OUTPUT")
@@ -1117,6 +1148,13 @@ PY
     fi
   fi
   "$OPENREWRITE_GENERATOR" "${generator_arguments[@]}"
+
+  "$PYTHON" "$PROJECT_ROOT/evaluation/materialize_candidate_batches.py" \
+    --generated-dir "$RESULTS_DIR/generated-openrewrite" \
+    --predictions "$PREDICTIONS" \
+    --output-dir "$RESULTS_DIR/prediction-batches" \
+    --batch-size "$BATCH_SIZE"
+  fi
 
   validator_arguments=(
     --repository "$REWRITE_REPO"
@@ -1180,6 +1218,20 @@ PY
   else
     echo "No candidate passed isolated source/build/API validation; leaving the worktree unchanged."
   fi
+  batch_archive="$RESULTS_DIR/openrewrite-batch-runs/batch-$(printf '%04d' "$START_BATCH")"
+  if ((MAX_BATCHES > 1)); then
+    batch_archive+="-through-$(printf '%04d' "$((START_BATCH + MAX_BATCHES - 1))")"
+  elif ((MAX_BATCHES == 0)); then
+    batch_archive+="-through-end"
+  fi
+  attempt_id="${SLURM_JOB_ID:-local-$(date +%Y%m%d-%H%M%S)}"
+  batch_archive+="/attempt-$attempt_id"
+  mkdir -p "$batch_archive"
+  cp -a "$RESULTS_DIR/openrewrite-validation/." "$batch_archive/"
+  cp "$RESULTS_DIR/prediction-batches/manifest.json" "$batch_archive/prediction-batches-manifest.json"
+  printf '%s\n' "$START_BATCH" >"$batch_archive/start-batch.txt"
+  printf '%s\n' "$MAX_BATCHES" >"$batch_archive/max-batches.txt"
+  echo "Preserved this iteration at: $batch_archive"
   write_stage_contract rewrite "$REWRITE_REPO" \
     "$RESULTS_DIR/openrewrite-validation/validation-report.json"
 fi

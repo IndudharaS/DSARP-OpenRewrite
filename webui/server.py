@@ -873,6 +873,12 @@ def start_run(payload: dict) -> dict:
 def result_summary(data: dict) -> dict:
     result = Path(data["runRoot"]) / "results"
     output: dict = {"available": result.is_dir()}
+    batch_manifest = result / "prediction-batches" / "manifest.json"
+    if batch_manifest.is_file():
+        try:
+            output["predictionBatches"] = read_json_file(batch_manifest)
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
     for key, relative in {
         "manifest": "generated-openrewrite/manifest.json",
         "validation": "openrewrite-validation/validation-report.json",
@@ -905,6 +911,8 @@ def result_summary(data: dict) -> dict:
         "results/semantic-analysis/status.json",
         "results/generated-openrewrite/manifest.csv",
         "results/generated-openrewrite/llm-proposals.zip",
+        "results/prediction-batches/manifest.json",
+        "results/prediction-batches/predictions.csv",
         "results/openrewrite-validation/validation-report.csv",
         "results/openrewrite-validation/validation-report.json",
         "results/openrewrite-validation/candidate-validation-evidence.zip",
@@ -916,6 +924,13 @@ def result_summary(data: dict) -> dict:
         "results/arcan-refactored/summary.json",
     ]
     run_root = Path(data["runRoot"])
+    for folder in (result / "prediction-batches", result / "openrewrite-batch-runs"):
+        if folder.is_dir():
+            expected_artifacts.extend(
+                str(path.relative_to(run_root)) for path in sorted(folder.rglob("*"))
+                if path.is_file() and path.suffix in {".csv", ".json", ".yml", ".txt", ".zip", ".log"}
+            )
+    expected_artifacts = list(dict.fromkeys(expected_artifacts))
     output["artifacts"] = [
         {"path": relative, "name": Path(relative).name, "size": (run_root / relative).stat().st_size}
         for relative in expected_artifacts if (run_root / relative).is_file()

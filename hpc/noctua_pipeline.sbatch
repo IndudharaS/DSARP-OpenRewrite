@@ -123,6 +123,9 @@ if [[ -n "${START_STAGE:-}" ]]; then
     exit 2
   }
   pipeline_resume_arguments+=(--from "$START_STAGE")
+  if [[ "$START_STAGE" == "rewrite" ]]; then
+    pipeline_resume_arguments+=(--reuse-generated-candidates)
+  fi
   printf 'Slurm job %s resumed run %s from %s with Maven fork count %s\n' \
     "$SLURM_JOB_ID" "$RESUME_RUN_ID" "$START_STAGE" "${DSARP_MAVEN_FORK_COUNT:-default}" \
     >"$RUN_ROOT/resume-$SLURM_JOB_ID.txt"

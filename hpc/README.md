@@ -82,6 +82,10 @@ squeue -u $USER
 
 ## One laptop-sized validation batch
 
+For Tika runs that prepare candidates once and then execute one stored
+OpenRewrite batch per Slurm job, see
+[`RUN_TIKA_ITERATIVE_BATCHES.md`](RUN_TIKA_ITERATIVE_BATCHES.md).
+
 For a complete copy-paste guide that runs only on the CPU partition with LLM
 resolution disabled, see [`RUN_PIPELINE_WITHOUT_LLM.md`](RUN_PIPELINE_WITHOUT_LLM.md).
 
