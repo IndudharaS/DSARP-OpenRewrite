@@ -435,6 +435,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(submit.call_args.kwargs["env"]["INCLUDE_CURATED_FILESIZE"], "1")
             self.assertEqual(submit.call_args.kwargs["env"]["STOP_STAGE"], "summary")
             self.assertEqual(submit.call_args.kwargs["env"]["MAX_COMMITS_PER_REPO"], "500")
+            self.assertEqual(submit.call_args.kwargs["timeout"], 120)
 
             tika_csvs = []
             for name in ("component-metrics.csv", "smell-characteristics.csv", "smell-affects.csv"):

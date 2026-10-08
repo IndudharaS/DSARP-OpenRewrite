@@ -735,8 +735,15 @@ def start_hpc_run(payload: dict) -> dict:
         environment.update({"RESUME_RUN_ID": resume_id, "START_STAGE": resume_stage})
     command = ["sbatch", "--parsable", f"--output={slurm_log_pattern}", f"--error={slurm_log_pattern}",
                "--export=ALL", str(HPC_SCRIPT)]
-    submitted = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
-                               text=True, timeout=30, check=False)
+    try:
+        submitted = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
+                                   text=True, timeout=120, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            "Slurm did not acknowledge the submission within 120 seconds. "
+            "Do not immediately submit again: first run 'squeue -u $USER' on the HPC "
+            "to check whether the job was accepted."
+        ) from error
     if submitted.returncode != 0:
         raise RuntimeError(f"Slurm submission failed: {submitted.stderr.strip() or submitted.stdout.strip()}")
     job_id = submitted.stdout.strip().split(";", 1)[0]
