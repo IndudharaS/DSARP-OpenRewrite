@@ -82,6 +82,9 @@ squeue -u $USER
 
 ## One laptop-sized validation batch
 
+For a complete copy-paste guide that runs only on the CPU partition with LLM
+resolution disabled, see [`RUN_PIPELINE_WITHOUT_LLM.md`](RUN_PIPELINE_WITHOUT_LLM.md).
+
 ```bash
 sbatch hpc/noctua_pipeline.sbatch
 ```
