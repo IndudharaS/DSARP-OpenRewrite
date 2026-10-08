@@ -59,15 +59,56 @@ class LlmResolverTests(unittest.TestCase):
                 "source_type": "a.A", "destination_type": "b.A",
             }))
 
-    def test_dashboard_llm_options_are_bounded(self):
-        enabled, endpoint, model, calls, confidence = validate_llm_options({
-            "llmEnabled": True, "llmEndpoint": "http://node1:8000/",
+    def test_dashboard_local_llm_options_are_bounded(self):
+        provider, endpoint, model, calls, confidence, key_file = validate_llm_options({
+            "llmProvider": "local", "llmEndpoint": "http://node1:8000/",
             "llmModel": "local-model", "llmMaxCalls": 25,
             "llmMinConfidence": 0.7,
         })
-        self.assertTrue(enabled)
+        self.assertEqual(provider, "local")
         self.assertEqual(endpoint, "http://node1:8000")
         self.assertEqual((model, calls, confidence), ("local-model", 25, 0.7))
+        self.assertEqual(key_file, "")
+
+    def test_dashboard_gemini_uses_secure_project_key_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            key_file = Path(temporary) / "gemini-api-key"
+            key_file.write_text("secret-value\n", encoding="utf-8")
+            key_file.chmod(0o600)
+            with mock.patch("webui.server.gemini_key_file", return_value=key_file), \
+                    mock.patch("webui.server.gemini_key_status", return_value={
+                        "configured": True, "location": ".secrets/gemini-api-key",
+                    }):
+                provider, endpoint, model, calls, confidence, resolved_key = validate_llm_options({
+                    "llmProvider": "gemini", "llmModel": "gemini-3.8-flash",
+                })
+        self.assertEqual(provider, "gemini")
+        self.assertEqual(endpoint, "https://generativelanguage.googleapis.com/v1beta/openai")
+        self.assertEqual(model, "gemini-3.8-flash")
+        self.assertEqual((calls, confidence), (20, 0.65))
+        self.assertEqual(resolved_key, str(key_file))
+
+    def test_gemini_request_uses_bearer_token_without_persisting_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            key_file = root / "key"
+            key_file.write_text("private-token", encoding="utf-8")
+            key_file.chmod(0o600)
+            with mock.patch("openrewrite.llm_resolver.urllib.request.urlopen",
+                            return_value=_Response()) as urlopen:
+                resolver = LlmResolver(
+                    "https://generativelanguage.googleapis.com/v1beta/openai",
+                    "gemini-3.8-flash", root / "artifacts", provider="gemini",
+                    api_key_file=key_file,
+                )
+                resolver.resolve(7, {"prediction_id": 7})
+            request = urlopen.call_args.args[0]
+            self.assertEqual(request.full_url,
+                             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            self.assertEqual(request.get_header("Authorization"), "Bearer private-token")
+            self.assertNotIn("temperature", json.loads(request.data))
+            artifact = (root / "artifacts" / "prediction-0007.json").read_text(encoding="utf-8")
+            self.assertNotIn("private-token", artifact)
 
     def test_generator_accepts_only_a_repository_bounded_internal_move(self):
         with tempfile.TemporaryDirectory() as temporary:

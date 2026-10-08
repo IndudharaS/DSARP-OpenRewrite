@@ -511,6 +511,8 @@ def generate(args: argparse.Namespace) -> None:
             args.llm_endpoint, args.llm_model, output_dir / "llm-proposals",
             timeout=args.llm_timeout, max_calls=args.llm_max_calls,
             min_confidence=args.llm_min_confidence,
+            provider=getattr(args, "llm_provider", "local"),
+            api_key_file=getattr(args, "llm_api_key_file", None),
         )
 
     with args.predictions.open(newline="", encoding="utf-8-sig") as handle:
@@ -1049,6 +1051,7 @@ def generate(args: argparse.Namespace) -> None:
         "aggregate_recipe_file": "all-candidates.yml",
         "llm_resolution": {
             "enabled": bool(llm),
+            "provider": getattr(args, "llm_provider", None) if llm else None,
             "endpoint": getattr(args, "llm_endpoint", None) if llm else None,
             "model": getattr(args, "llm_model", None) if llm else None,
             "network_calls": llm.calls if llm else 0,
@@ -1093,6 +1096,9 @@ def main() -> None:
     parser.add_argument("--include-curated-filesize", action="store_true",
                         help="include the evidence-backed Log4j2 FileSize compatibility experiment")
     parser.add_argument("--llm-endpoint", help="OpenAI-compatible local endpoint, for example http://gpu-node:8000")
+    parser.add_argument("--llm-provider", choices=("local", "gemini"), default="local")
+    parser.add_argument("--llm-api-key-file", type=Path,
+                        help="mode-600 API-key file; required for the Gemini provider")
     parser.add_argument("--llm-model", default="Qwen/Qwen3-Coder-30B-A3B-Instruct")
     parser.add_argument("--llm-timeout", type=int, default=120)
     parser.add_argument("--llm-max-calls", type=int, default=20)
@@ -1107,7 +1113,12 @@ def main() -> None:
         parser.error("--severity-categories must contain high, medium and/or low")
     args.severity_categories = ",".join(categories)
     if args.llm_endpoint and not re.fullmatch(r"https?://[^\s/]+(?::\d+)?", args.llm_endpoint.rstrip("/")):
-        parser.error("--llm-endpoint must be an HTTP(S) origin without a path")
+        if args.llm_provider != "gemini" or not re.fullmatch(
+                r"https://generativelanguage\.googleapis\.com/v1beta/openai/?",
+                args.llm_endpoint):
+            parser.error("invalid LLM endpoint")
+    if args.llm_provider == "gemini" and not args.llm_api_key_file:
+        parser.error("--llm-api-key-file is required for Gemini")
     if args.llm_timeout < 1 or args.llm_max_calls < 1 or not 0 <= args.llm_min_confidence <= 1:
         parser.error("invalid LLM timeout, call limit, or confidence threshold")
     generate(args)

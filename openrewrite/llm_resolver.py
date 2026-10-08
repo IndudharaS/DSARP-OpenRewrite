@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 import time
 import urllib.error
 import urllib.request
@@ -37,14 +38,28 @@ class LlmProposal:
 
 class LlmResolver:
     def __init__(self, endpoint: str, model: str, output_dir: Path, *, timeout: int = 120,
-                 max_calls: int = 20, min_confidence: float = 0.65) -> None:
+                 max_calls: int = 20, min_confidence: float = 0.65,
+                 provider: str = "local", api_key_file: Path | None = None) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.model = model
+        self.provider = provider
         self.output_dir = output_dir
         self.timeout = timeout
         self.max_calls = max_calls
         self.min_confidence = min_confidence
         self.calls = 0
+        self.api_key: str | None = None
+        if provider not in {"local", "gemini"}:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+        if provider == "gemini":
+            if api_key_file is None or not api_key_file.is_file():
+                raise ValueError("Gemini requires an existing API-key file")
+            permissions = stat.S_IMODE(api_key_file.stat().st_mode)
+            if permissions & 0o077:
+                raise ValueError("Gemini API-key file must have mode 600")
+            self.api_key = api_key_file.read_text(encoding="utf-8").strip()
+            if not self.api_key:
+                raise ValueError("Gemini API-key file is empty")
         output_dir.mkdir(parents=True, exist_ok=True)
 
     def resolve(self, prediction_id: int, evidence: dict[str, Any]) -> LlmProposal | None:
@@ -52,13 +67,16 @@ class LlmResolver:
             return None
         request_body = {
             "model": self.model,
-            "temperature": 0.0,
             "max_tokens": 700,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(evidence, sort_keys=True)},
             ],
         }
+        # Gemini 3.6+ rejects legacy sampling controls. Local OpenAI-compatible
+        # servers still benefit from deterministic temperature-zero decoding.
+        if self.provider == "local":
+            request_body["temperature"] = 0.0
         encoded = json.dumps(request_body, sort_keys=True).encode("utf-8")
         request_hash = hashlib.sha256(encoded).hexdigest()
         artifact = self.output_dir / f"prediction-{prediction_id:04d}.json"
@@ -69,13 +87,16 @@ class LlmResolver:
 
         self.calls += 1
         started = time.monotonic()
-        request = urllib.request.Request(
-            f"{self.endpoint}/v1/chat/completions", data=encoded,
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
+        url = (f"{self.endpoint}/chat/completions" if self.provider == "gemini"
+               else f"{self.endpoint}/v1/chat/completions")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = urllib.request.Request(url, data=encoded, headers=headers, method="POST")
         saved: dict[str, Any] = {
             "prediction_id": prediction_id, "endpoint": self.endpoint,
-            "model": self.model, "request_sha256": request_hash,
+            "provider": self.provider, "model": self.model,
+            "request_sha256": request_hash,
         }
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:

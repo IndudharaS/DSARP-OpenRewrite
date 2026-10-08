@@ -47,6 +47,8 @@ START_BATCH=1
 MAX_BATCHES=0
 MAX_COMMITS_PER_REPO=500
 LLM_ENDPOINT="${DSARP_LLM_ENDPOINT:-}"
+LLM_PROVIDER="${DSARP_LLM_PROVIDER:-local}"
+LLM_API_KEY_FILE="${DSARP_LLM_API_KEY_FILE:-}"
 LLM_MODEL="${DSARP_LLM_MODEL:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
 LLM_MAX_CALLS="${DSARP_LLM_MAX_CALLS:-20}"
 LLM_MIN_CONFIDENCE="${DSARP_LLM_MIN_CONFIDENCE:-0.65}"
@@ -98,6 +100,9 @@ Options:
                          repository (default: 500).
   --llm-endpoint URL     Use an OpenAI-compatible local LLM to resolve otherwise
                          unresolved candidates (for example http://gpu-node:8000).
+  --llm-provider NAME    local or gemini (default: local).
+  --llm-api-key-file PATH
+                         Mode-600 key file required by the Gemini provider.
   --llm-model NAME       Served model name reported to the endpoint.
   --llm-max-calls NUMBER Maximum LLM requests in one run (default: 20).
   --llm-min-confidence N Reject proposals below this confidence (default: 0.65).
@@ -152,6 +157,8 @@ while (($#)); do
     --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
     --max-commits-per-repo) MAX_COMMITS_PER_REPO="${2:?missing commit limit}"; shift 2 ;;
     --llm-endpoint) LLM_ENDPOINT="${2:?missing LLM endpoint}"; shift 2 ;;
+    --llm-provider) LLM_PROVIDER="${2:?missing LLM provider}"; shift 2 ;;
+    --llm-api-key-file) LLM_API_KEY_FILE="${2:?missing LLM key file}"; shift 2 ;;
     --llm-model) LLM_MODEL="${2:?missing LLM model}"; shift 2 ;;
     --llm-max-calls) LLM_MAX_CALLS="${2:?missing LLM call limit}"; shift 2 ;;
     --llm-min-confidence) LLM_MIN_CONFIDENCE="${2:?missing LLM confidence}"; shift 2 ;;
@@ -176,6 +183,10 @@ fi
 [[ "$MAX_BATCHES" =~ ^[0-9]+$ ]] || { echo "--max-batches must be zero or a positive integer" >&2; exit 2; }
 [[ "$MAX_COMMITS_PER_REPO" =~ ^[1-9][0-9]*$ ]] || { echo "--max-commits-per-repo must be a positive integer" >&2; exit 2; }
 [[ "$LLM_MAX_CALLS" =~ ^[1-9][0-9]*$ ]] || { echo "--llm-max-calls must be a positive integer" >&2; exit 2; }
+[[ "$LLM_PROVIDER" == "local" || "$LLM_PROVIDER" == "gemini" ]] || { echo "--llm-provider must be local or gemini" >&2; exit 2; }
+if [[ "$LLM_PROVIDER" == "gemini" && -n "$LLM_ENDPOINT" ]]; then
+  [[ -f "$LLM_API_KEY_FILE" ]] || { echo "Gemini API-key file is missing: $LLM_API_KEY_FILE" >&2; exit 2; }
+fi
 if [[ "$PROFILE" == "generic" ]]; then
   OPENREWRITE_RUNNER="$PROJECT_ROOT/scripts/run_openrewrite_maven.sh"
   VALIDATOR_COMPATIBILITY_PROFILE="none"
@@ -1098,8 +1109,12 @@ PY
     generator_arguments+=(--include-curated-filesize)
   fi
   if [[ -n "$LLM_ENDPOINT" ]]; then
-    generator_arguments+=(--llm-endpoint "$LLM_ENDPOINT" --llm-model "$LLM_MODEL" \
+    generator_arguments+=(--llm-endpoint "$LLM_ENDPOINT" --llm-provider "$LLM_PROVIDER" \
+      --llm-model "$LLM_MODEL" \
       --llm-max-calls "$LLM_MAX_CALLS" --llm-min-confidence "$LLM_MIN_CONFIDENCE")
+    if [[ "$LLM_PROVIDER" == "gemini" ]]; then
+      generator_arguments+=(--llm-api-key-file "$LLM_API_KEY_FILE")
+    fi
   fi
   "$OPENREWRITE_GENERATOR" "${generator_arguments[@]}"
 

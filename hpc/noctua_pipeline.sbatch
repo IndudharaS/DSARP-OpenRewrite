@@ -65,6 +65,8 @@ MAX_BATCHES="${MAX_BATCHES:-1}"
 PIPELINE_MODE="${PIPELINE_MODE:-reuse_predictions}"
 MAX_COMMITS_PER_REPO="${MAX_COMMITS_PER_REPO:-500}"
 LLM_ENDPOINT="${LLM_ENDPOINT:-}"
+LLM_PROVIDER="${LLM_PROVIDER:-local}"
+LLM_API_KEY_FILE="${LLM_API_KEY_FILE:-}"
 LLM_MODEL="${LLM_MODEL:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
 LLM_MAX_CALLS="${LLM_MAX_CALLS:-20}"
 LLM_MIN_CONFIDENCE="${LLM_MIN_CONFIDENCE:-0.65}"
@@ -153,14 +155,37 @@ if [[ -n "$PROFILE" ]]; then
   pipeline_policy_arguments+=(--profile "$PROFILE")
 fi
 if [[ -n "$LLM_ENDPOINT" ]]; then
-  curl -fsS --connect-timeout 10 --max-time 30 "$LLM_ENDPOINT/v1/models" >/dev/null || {
+  "$DSARP_PYTHON" - "$LLM_PROVIDER" "$LLM_ENDPOINT" "$LLM_API_KEY_FILE" <<'PY' || {
+import json, stat, sys, urllib.request
+from pathlib import Path
+
+provider, endpoint, key_name = sys.argv[1:]
+headers = {}
+url = endpoint.rstrip("/") + ("/models" if provider == "gemini" else "/v1/models")
+if provider == "gemini":
+    key_file = Path(key_name)
+    if not key_file.is_file() or stat.S_IMODE(key_file.stat().st_mode) & 0o077:
+        raise SystemExit("Gemini API-key file is missing or is not mode 600")
+    key = key_file.read_text(encoding="utf-8").strip()
+    if not key:
+        raise SystemExit("Gemini API-key file is empty")
+    headers["Authorization"] = f"Bearer {key}"
+request = urllib.request.Request(url, headers=headers)
+with urllib.request.urlopen(request, timeout=30) as response:
+    json.loads(response.read().decode("utf-8"))
+print(f"{provider} LLM endpoint is reachable")
+PY
     echo "The configured LLM service is not reachable from $(hostname): $LLM_ENDPOINT" >&2
-    echo "Start the GPU model service first and use its compute-node URL." >&2
+    echo "Check the provider, network access, endpoint, model and credentials." >&2
     exit 1
   }
-  pipeline_policy_arguments+=(--llm-endpoint "$LLM_ENDPOINT" --llm-model "$LLM_MODEL" \
+  pipeline_policy_arguments+=(--llm-endpoint "$LLM_ENDPOINT" --llm-provider "$LLM_PROVIDER" \
+    --llm-model "$LLM_MODEL" \
     --llm-max-calls "$LLM_MAX_CALLS" --llm-min-confidence "$LLM_MIN_CONFIDENCE")
-  echo "LLM candidate resolution: $LLM_MODEL at $LLM_ENDPOINT (maximum $LLM_MAX_CALLS calls)"
+  if [[ "$LLM_PROVIDER" == "gemini" ]]; then
+    pipeline_policy_arguments+=(--llm-api-key-file "$LLM_API_KEY_FILE")
+  fi
+  echo "LLM candidate resolution: $LLM_PROVIDER / $LLM_MODEL at $LLM_ENDPOINT (maximum $LLM_MAX_CALLS calls)"
 fi
 
 scripts/run_generic_pipeline.sh \

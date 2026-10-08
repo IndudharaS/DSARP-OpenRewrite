@@ -38,7 +38,7 @@ Open <http://127.0.0.1:8765>, then configure the experiment:
 3. Select **Start a new HPC run**.
 4. Choose **Fast verified flow** to reuse exact-commit predictions, or
    **Complete flow from shared mining** to train and predict again.
-5. Leave **Local HPC LLM resolution** unchecked.
+5. Under **Recipe resolution method**, choose **Normal deterministic flow**.
 6. Select the required severities.
 7. For the first check, use 10 candidates per batch, start at batch 1, and run
    1 batch.
@@ -46,8 +46,8 @@ Open <http://127.0.0.1:8765>, then configure the experiment:
    and revision.
 9. Start the experiment.
 
-When the LLM checkbox is disabled, the dashboard exports an empty
-`LLM_ENDPOINT`; the pipeline therefore uses only deterministic semantic and
+In normal deterministic mode, the dashboard exports an empty `LLM_ENDPOINT`;
+the pipeline therefore uses only deterministic semantic and
 import-based candidate resolution.
 
 ## 3. Direct Slurm submission using cached predictions
@@ -220,4 +220,3 @@ unset SYSTEM REPOSITORY_URL VERSION_ID BASELINE_CSV_DIR
 unset PIPELINE_MODE SEVERITY_CATEGORIES BATCH_SIZE START_BATCH MAX_BATCHES
 unset MAX_COMMITS_PER_REPO INCLUDE_CURATED_FILESIZE LLM_ENDPOINT
 ```
-

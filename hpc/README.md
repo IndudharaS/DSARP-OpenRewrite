@@ -102,7 +102,17 @@ Fresh mode does not require the shared prediction CSV. It passes `--remine`,
 then prepares training data, trains the model, generates new predictions, and
 continues through OpenRewrite and Arcan.
 
-## Optional local LLM recipe resolution
+## Optional LLM recipe resolution
+
+The web interface offers three explicit modes:
+
+- **Normal deterministic flow**: no LLM and no API key.
+- **Google Gemini API**: external API using an owner-only key file stored at
+  `.secrets/gemini-api-key`. See
+  [`RUN_PIPELINE_WITH_GEMINI.md`](RUN_PIPELINE_WITH_GEMINI.md).
+- **Local LLM on HPC**: an OpenAI-compatible vLLM server on a GPU node.
+
+### Local HPC model
 
 The pipeline can ask an OpenAI-compatible model hosted on an HPC GPU node to
 resolve predictions that deterministic semantic analysis cannot concretize.
@@ -123,7 +133,7 @@ LLM_JOB=<job-id>
 cat "/scratch/hpc-prf-dssecs/$USER/llm-services/$LLM_JOB/service.json"
 ```
 
-In the dashboard, enable **Local HPC LLM resolution**, copy the `endpoint`, and
+In the dashboard, choose **Local LLM on HPC**, copy the `endpoint`, and
 leave the served model as `Qwen/Qwen3-Coder-30B-A3B-Instruct`. Start with 20
 requests and confidence 0.65. The CPU pipeline job checks the endpoint before
 starting and stores every prompt hash, response, model name, timing and accepted

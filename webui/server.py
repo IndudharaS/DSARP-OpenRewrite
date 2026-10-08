@@ -12,6 +12,7 @@ import mimetypes
 import os
 import re
 import signal
+import stat
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,7 @@ HPC_REFRESHING: set[str] = set()
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
 HTTP_ORIGIN = re.compile(r"^https?://[^\s/]+(?::[0-9]{1,5})?/?$")
+GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai"
 SLURM_ACTIVE = {"PENDING": "queued", "CONFIGURING": "queued", "RUNNING": "running",
                 "COMPLETING": "running", "REQUEUED": "queued", "RESIZING": "running"}
 SLURM_FAILED = {"FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "BOOT_FAIL",
@@ -488,20 +490,47 @@ def validate_max_commits(payload: dict) -> int:
     return value
 
 
-def validate_llm_options(payload: dict) -> tuple[bool, str, str, int, float]:
-    enabled = bool(payload.get("llmEnabled", False))
-    endpoint = str(payload.get("llmEndpoint", "")).strip().rstrip("/")
-    model = str(payload.get("llmModel", "Qwen/Qwen3-Coder-30B-A3B-Instruct")).strip()
+def gemini_key_file() -> Path:
+    return Path(os.environ.get("DSARP_GEMINI_API_KEY_FILE",
+                               str(ROOT / ".secrets" / "gemini-api-key"))).resolve()
+
+
+def gemini_key_status() -> dict:
+    path = gemini_key_file()
+    inside_project = path == ROOT or ROOT in path.parents
+    exists = path.is_file()
+    secure = exists and stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
+    return {"configured": bool(inside_project and exists and secure),
+            "location": ".secrets/gemini-api-key"}
+
+
+def validate_llm_options(payload: dict) -> tuple[str, str, str, int, float, str]:
+    provider = str(payload.get("llmProvider", "none")).strip().lower()
+    if provider not in {"none", "gemini", "local"}:
+        raise ValueError("LLM provider must be none, gemini or local")
+    local_endpoint = str(payload.get("llmEndpoint", "")).strip().rstrip("/")
+    endpoint = GEMINI_ENDPOINT if provider == "gemini" else local_endpoint
+    default_model = ("gemini-3.8-flash" if provider == "gemini"
+                     else "Qwen/Qwen3-Coder-30B-A3B-Instruct")
+    model = str(payload.get("llmModel", default_model)).strip()
     try:
         max_calls = int(payload.get("llmMaxCalls", 20))
         confidence = float(payload.get("llmMinConfidence", 0.65))
     except (TypeError, ValueError) as error:
         raise ValueError("LLM call limit and confidence must be numeric") from error
-    if enabled and (not HTTP_ORIGIN.fullmatch(endpoint) or not model):
-        raise ValueError("LLM endpoint must be an HTTP(S) origin and model must not be empty")
+    if provider == "local" and (not HTTP_ORIGIN.fullmatch(endpoint) or not model):
+        raise ValueError("Local LLM endpoint must be an HTTP(S) origin and model must not be empty")
+    key_file = ""
+    if provider == "gemini":
+        status = gemini_key_status()
+        if not status["configured"]:
+            raise ValueError("Gemini key is not configured; create .secrets/gemini-api-key with mode 600")
+        if not model:
+            raise ValueError("Gemini model must not be empty")
+        key_file = str(gemini_key_file())
     if not 1 <= max_calls <= 500 or not 0 <= confidence <= 1:
         raise ValueError("LLM calls must be 1-500 and confidence must be between 0 and 1")
-    return enabled, endpoint, model, max_calls, confidence
+    return provider, endpoint, model, max_calls, confidence, key_file
 
 
 def shared_mining_summary() -> dict:
@@ -597,7 +626,7 @@ def submission_key(payload: dict) -> str:
         "freshMining", "allowRiskyCandidates", "severityCategories", "batchSize",
         "startBatch", "maxBatches", "resumeRunId", "resumeStage", "stopStage",
         "workflowGoal", "maxCommitsPerRepository", "runName", "pretrainedModelDir",
-        "llmEnabled", "llmEndpoint", "llmModel", "llmMaxCalls", "llmMinConfidence",
+        "llmProvider", "llmEndpoint", "llmModel", "llmMaxCalls", "llmMinConfidence",
     )}
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
@@ -635,7 +664,7 @@ def start_hpc_run(payload: dict) -> dict:
     pretrained_model = validate_pretrained_model(payload) if mode == "pretrained_model" else ""
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky = bool(payload.get("allowRiskyCandidates", False))
-    llm_enabled, llm_endpoint, llm_model, llm_max_calls, llm_confidence = validate_llm_options(payload)
+    llm_provider, llm_endpoint, llm_model, llm_max_calls, llm_confidence, llm_key_file = validate_llm_options(payload)
     compatibility_profile = profile_for_target(system, repository)
     include_curated_filesize = compatibility_profile == "log4j2"
     resume_id = str(payload.get("resumeRunId", "")).strip()
@@ -695,7 +724,9 @@ def start_hpc_run(payload: dict) -> dict:
         "ALLOW_RISKY_CANDIDATES": "1" if allow_risky else "0",
         "INCLUDE_CURATED_FILESIZE": "1" if include_curated_filesize else "0",
         "PROFILE": compatibility_profile if compatibility_profile != "none" else "generic",
-        "LLM_ENDPOINT": llm_endpoint if llm_enabled else "",
+        "LLM_PROVIDER": llm_provider,
+        "LLM_ENDPOINT": llm_endpoint if llm_provider != "none" else "",
+        "LLM_API_KEY_FILE": llm_key_file,
         "LLM_MODEL": llm_model,
         "LLM_MAX_CALLS": str(llm_max_calls),
         "LLM_MIN_CONFIDENCE": str(llm_confidence),
@@ -721,8 +752,9 @@ def start_hpc_run(payload: dict) -> dict:
         "mode": mode, "workflowGoal": workflow_goal, "executionTarget": "hpc", "freshMining": fresh_mining,
         "allowRiskyCandidates": allow_risky, "includeCuratedFileSize": include_curated_filesize,
         "compatibilityProfile": compatibility_profile,
-        "llmEnabled": llm_enabled, "llmEndpoint": llm_endpoint if llm_enabled else None,
-        "llmModel": llm_model if llm_enabled else None, "llmMaxCalls": llm_max_calls,
+        "llmProvider": llm_provider,
+        "llmEndpoint": llm_endpoint if llm_provider != "none" else None,
+        "llmModel": llm_model if llm_provider != "none" else None, "llmMaxCalls": llm_max_calls,
         "llmMinConfidence": llm_confidence,
         "severityCategories": categories,
         "batchSize": batch_size, "startBatch": start_batch, "maxBatches": max_batches,
@@ -783,7 +815,7 @@ def start_run(payload: dict) -> dict:
         raise ValueError("Unknown run mode")
     fresh_mining = bool(payload.get("freshMining", False))
     allow_risky_candidates = bool(payload.get("allowRiskyCandidates", False))
-    llm_enabled, llm_endpoint, llm_model, llm_max_calls, llm_confidence = validate_llm_options(payload)
+    llm_provider, llm_endpoint, llm_model, llm_max_calls, llm_confidence, llm_key_file = validate_llm_options(payload)
     include_curated_filesize = compatibility_profile == "log4j2"
     severity_categories, batch_size, start_batch, max_batches = validate_batch_options(payload)
     if fresh_mining:
@@ -794,10 +826,13 @@ def start_run(payload: dict) -> dict:
         command.append("--allow-risky-candidates")
     if include_curated_filesize:
         command.append("--include-curated-filesize")
-    if llm_enabled:
-        command += ["--llm-endpoint", llm_endpoint, "--llm-model", llm_model,
+    if llm_provider != "none":
+        command += ["--llm-endpoint", llm_endpoint, "--llm-provider", llm_provider,
+                    "--llm-model", llm_model,
                     "--llm-max-calls", str(llm_max_calls),
                     "--llm-min-confidence", str(llm_confidence)]
+        if llm_provider == "gemini":
+            command += ["--llm-api-key-file", llm_key_file]
     command += ["--severity-categories", ",".join(severity_categories),
                 "--batch-size", str(batch_size), "--start-batch", str(start_batch),
                 "--max-batches", str(max_batches), "--max-commits-per-repo", str(max_commits),
@@ -810,8 +845,9 @@ def start_run(payload: dict) -> dict:
             "allowRiskyCandidates": allow_risky_candidates,
             "includeCuratedFileSize": include_curated_filesize,
             "compatibilityProfile": compatibility_profile,
-            "llmEnabled": llm_enabled, "llmEndpoint": llm_endpoint if llm_enabled else None,
-            "llmModel": llm_model if llm_enabled else None, "llmMaxCalls": llm_max_calls,
+            "llmProvider": llm_provider,
+            "llmEndpoint": llm_endpoint if llm_provider != "none" else None,
+            "llmModel": llm_model if llm_provider != "none" else None, "llmMaxCalls": llm_max_calls,
             "llmMinConfidence": llm_confidence,
             "severityCategories": severity_categories, "batchSize": batch_size,
             "startBatch": start_batch, "maxBatches": max_batches,
@@ -910,6 +946,7 @@ class Handler(BaseHTTPRequestHandler):
                                            "executionMode": EXECUTION_MODE,
                                            "hpcAvailable": hpc_available(),
                                            "hpcProjectSpace": str(HPC_PROJECT_SPACE),
+                                           "gemini": gemini_key_status(),
                                            "sharedMining": shared_mining_summary(),
                                            "sharedModel": shared_model_summary()})
             if parsed.path == "/api/runs":
