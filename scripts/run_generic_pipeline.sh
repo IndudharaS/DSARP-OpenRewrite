@@ -26,6 +26,12 @@ BATCH_SIZE=10
 START_BATCH=1
 MAX_BATCHES=0
 MAX_COMMITS_PER_REPO=500
+LLM_ENDPOINT=""
+LLM_PROVIDER="local"
+LLM_API_KEY_FILE=""
+LLM_MODEL="Qwen/Qwen3-Coder-30B-A3B-Instruct"
+LLM_MAX_CALLS=20
+LLM_MIN_CONFIDENCE=0.65
 
 usage() {
   cat <<'EOF'
@@ -63,6 +69,13 @@ Inputs:
   --max-batches NUMBER      Maximum batches to run; 0 means all.
   --max-commits-per-repo NUMBER
                             Historical commits mined per training repository.
+  --llm-endpoint URL        Use an OpenAI-compatible LLM endpoint to resolve
+                            otherwise unresolved repository-bounded candidates.
+  --llm-provider NAME       local or gemini (default: local).
+  --llm-api-key-file PATH   Mode-600 key file required by Gemini.
+  --llm-model NAME          Model name sent to the configured endpoint.
+  --llm-max-calls NUMBER    Maximum LLM requests in one run (default: 20).
+  --llm-min-confidence N    Reject proposals below this confidence (default: 0.65).
 
 Lifecycle:
   --clean                   Back up an existing run before starting.
@@ -96,6 +109,12 @@ while (($#)); do
     --start-batch) START_BATCH="${2:?missing start batch}"; shift 2 ;;
     --max-batches) MAX_BATCHES="${2:?missing maximum batches}"; shift 2 ;;
     --max-commits-per-repo) MAX_COMMITS_PER_REPO="${2:?missing commit limit}"; shift 2 ;;
+    --llm-endpoint) LLM_ENDPOINT="${2:?missing LLM endpoint}"; shift 2 ;;
+    --llm-provider) LLM_PROVIDER="${2:?missing LLM provider}"; shift 2 ;;
+    --llm-api-key-file) LLM_API_KEY_FILE="${2:?missing LLM key file}"; shift 2 ;;
+    --llm-model) LLM_MODEL="${2:?missing LLM model}"; shift 2 ;;
+    --llm-max-calls) LLM_MAX_CALLS="${2:?missing LLM call limit}"; shift 2 ;;
+    --llm-min-confidence) LLM_MIN_CONFIDENCE="${2:?missing LLM confidence}"; shift 2 ;;
     --run-root) RUN_ROOT="${2:?missing path}"; shift 2 ;;
     --clean|--from|--through)
       FORWARD+=("$1")
@@ -177,6 +196,18 @@ if ((REUSE_GENERATED_CANDIDATES)); then
 fi
 arguments+=(--severity-categories "$SEVERITY_CATEGORIES" --batch-size "$BATCH_SIZE" --start-batch "$START_BATCH" --max-batches "$MAX_BATCHES")
 arguments+=(--max-commits-per-repo "$MAX_COMMITS_PER_REPO")
+if [[ -n "$LLM_ENDPOINT" ]]; then
+  arguments+=(
+    --llm-endpoint "$LLM_ENDPOINT"
+    --llm-provider "$LLM_PROVIDER"
+    --llm-model "$LLM_MODEL"
+    --llm-max-calls "$LLM_MAX_CALLS"
+    --llm-min-confidence "$LLM_MIN_CONFIDENCE"
+  )
+  if [[ "$LLM_PROVIDER" == "gemini" ]]; then
+    arguments+=(--llm-api-key-file "$LLM_API_KEY_FILE")
+  fi
+fi
 
 if ((${#FORWARD[@]})); then
   exec "$SCRIPT_DIR/run_log4j2_pipeline.sh" "${arguments[@]}" "${FORWARD[@]}"

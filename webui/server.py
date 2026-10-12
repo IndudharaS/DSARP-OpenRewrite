@@ -500,7 +500,14 @@ def gemini_key_status() -> dict:
     inside_project = path == ROOT or ROOT in path.parents
     exists = path.is_file()
     secure = exists and stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
-    return {"configured": bool(inside_project and exists and secure),
+    valid = False
+    if inside_project and exists and secure:
+        try:
+            key = path.read_text(encoding="utf-8").strip()
+            valid = bool(key) and not any(character.isspace() for character in key)
+        except (OSError, UnicodeError):
+            valid = False
+    return {"configured": bool(inside_project and exists and secure and valid),
             "location": ".secrets/gemini-api-key"}
 
 
@@ -524,7 +531,10 @@ def validate_llm_options(payload: dict) -> tuple[str, str, str, int, float, str]
     if provider == "gemini":
         status = gemini_key_status()
         if not status["configured"]:
-            raise ValueError("Gemini key is not configured; create .secrets/gemini-api-key with mode 600")
+            raise ValueError(
+                "Gemini key is missing, insecure, or malformed; the mode-600 "
+                ".secrets/gemini-api-key file must contain only the API key"
+            )
         if not model:
             raise ValueError("Gemini model must not be empty")
         key_file = str(gemini_key_file())

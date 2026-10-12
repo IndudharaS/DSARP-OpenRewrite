@@ -172,6 +172,8 @@ if provider == "gemini":
     key = key_file.read_text(encoding="utf-8").strip()
     if not key:
         raise SystemExit("Gemini API-key file is empty")
+    if any(character.isspace() for character in key):
+        raise SystemExit("Gemini API-key file is malformed; it must contain only one API key")
     headers["Authorization"] = f"Bearer {key}"
 request = urllib.request.Request(url, headers=headers)
 with urllib.request.urlopen(request, timeout=30) as response:

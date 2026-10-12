@@ -60,6 +60,8 @@ class LlmResolver:
             self.api_key = api_key_file.read_text(encoding="utf-8").strip()
             if not self.api_key:
                 raise ValueError("Gemini API-key file is empty")
+            if any(character.isspace() for character in self.api_key):
+                raise ValueError("Gemini API-key file must contain only one API key")
         output_dir.mkdir(parents=True, exist_ok=True)
 
     def resolve(self, prediction_id: int, evidence: dict[str, Any]) -> LlmProposal | None:

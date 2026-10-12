@@ -88,6 +88,29 @@ class LlmResolverTests(unittest.TestCase):
         self.assertEqual((calls, confidence), (20, 0.65))
         self.assertEqual(resolved_key, str(key_file))
 
+    def test_dashboard_rejects_multiline_gemini_key_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            key_file = Path(temporary) / "gemini-api-key"
+            key_file.write_text("printf command\nsecret-value\n", encoding="utf-8")
+            key_file.chmod(0o600)
+            with mock.patch("webui.server.gemini_key_file", return_value=key_file):
+                with self.assertRaisesRegex(ValueError, "malformed"):
+                    validate_llm_options({
+                        "llmProvider": "gemini", "llmModel": "gemini-test",
+                    })
+
+    def test_resolver_rejects_multiline_gemini_key_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            key_file = Path(temporary) / "gemini-api-key"
+            key_file.write_text("first-line\nsecond-line\n", encoding="utf-8")
+            key_file.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "only one API key"):
+                LlmResolver(
+                    "https://generativelanguage.googleapis.com/v1beta/openai",
+                    "gemini-test", Path(temporary) / "artifacts",
+                    provider="gemini", api_key_file=key_file,
+                )
+
     def test_gemini_request_uses_bearer_token_without_persisting_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

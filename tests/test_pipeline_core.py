@@ -87,6 +87,15 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("profile_for_target", script)
         self.assertIn('if [[ "$detected_profile" == "none" ]]', script)
 
+    def test_generic_cli_forwards_llm_configuration(self) -> None:
+        script = (Path(__file__).parents[1] / "scripts" / "run_generic_pipeline.sh").read_text()
+        for option in (
+            "--llm-endpoint", "--llm-provider", "--llm-api-key-file",
+            "--llm-model", "--llm-max-calls", "--llm-min-confidence",
+        ):
+            self.assertIn(option, script)
+        self.assertIn('if [[ -n "$LLM_ENDPOINT" ]]', script)
+
     def test_production_changes_map_to_affected_maven_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary)
