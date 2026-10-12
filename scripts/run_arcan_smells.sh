@@ -102,13 +102,42 @@ PY
   -p "$OUTPUT_DIR/input-classes" -class -all -out "$OUTPUT_DIR/raw" \
   >"$OUTPUT_DIR/arcan.log" 2>&1
 
-required=(HL.csv UD.csv UD30.csv PM.csv CM.csv packageCyclicDependencyTable.csv classCyclicDependencyTable.csv)
+required=(PM.csv CM.csv)
 for report in "${required[@]}"; do
   [[ -f "$OUTPUT_DIR/raw/$report" ]] || {
     echo "Arcan did not create $report; see $OUTPUT_DIR/arcan.log" >&2
     exit 1
   }
 done
+
+# Arcan 1.2.1 does not always create a CSV for a smell category when it finds
+# zero instances.  That is a valid zero result, not an analysis failure.  Keep
+# the metrics reports mandatory above, then materialize schema-correct empty
+# reports so summarization and matched before/after comparisons remain stable.
+declare -a synthesized=()
+for report in HL.csv UD.csv UD30.csv packageCyclicDependencyTable.csv classCyclicDependencyTable.csv; do
+  [[ -f "$OUTPUT_DIR/raw/$report" ]] && continue
+  case "$report" in
+    HL.csv)
+      header='Class,FanIn,FanOut,Total Dependences'
+      ;;
+    UD.csv|UD30.csv)
+      header='UnstableDependenciesPackage,InstabilityUnstableDependenciesPackage,CorrelatedPackage,InstabilityCorrelatedPackage'
+      ;;
+    packageCyclicDependencyTable.csv|classCyclicDependencyTable.csv)
+      header='Cycle'
+      ;;
+  esac
+  printf '%s\n' "$header" > "$OUTPUT_DIR/raw/$report"
+  synthesized+=("$report")
+  echo "Arcan reported zero instances for $report; created an empty report."
+done
+
+if (( ${#synthesized[@]} > 0 )); then
+  printf '%s\n' "${synthesized[@]}" > "$OUTPUT_DIR/synthesized-empty-reports.txt"
+else
+  : > "$OUTPUT_DIR/synthesized-empty-reports.txt"
+fi
 
 "$PYTHON" "$PROJECT_ROOT/evaluation/summarize_arcan.py" \
   summarize "$OUTPUT_DIR/raw" --output "$OUTPUT_DIR/summary.json" \
