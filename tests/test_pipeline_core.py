@@ -96,6 +96,16 @@ class EvidenceTests(unittest.TestCase):
             self.assertIn(option, script)
         self.assertIn('if [[ -n "$LLM_ENDPOINT" ]]', script)
 
+    def test_csv_parser_supports_compact_arcan_exports(self) -> None:
+        notebook = json.loads(
+            (Path(__file__).parents[1] / "csv_parser.ipynb").read_text(encoding="utf-8")
+        )
+        source = "\n".join(
+            "".join(cell.get("source", [])) for cell in notebook["cells"]
+        )
+        self.assertIn('elif "AffectedElements" in smells.columns:', source)
+        self.assertIn('return pd.Series(0.0, index=frame.index, dtype=float)', source)
+
     def test_production_changes_map_to_affected_maven_modules(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary)
